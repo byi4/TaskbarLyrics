@@ -171,11 +171,11 @@ if(MSVC)
             COMMENT "Copying resources to output directory")
     endif()
 
-    # 复制 EXE 到 MoeKoeMusic 插件目录
-    set(PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics")
+    # 复制 EXE 到 extension/ 目录（以及 MoeKoeMusic 插件目录）
+    set(EXTENSION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extension")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:${PROJECT_NAME}>
-            "${PLUGIN_DIR}/MoeKoeTaskbarLyrics.exe"
-        COMMENT "Copying EXE to MoeKoeMusic plugin directory")
+            "${EXTENSION_DIR}/MoeKoeTaskbarLyrics.exe"
+        COMMENT "Copying EXE to project extension/ directory")
 endif()
