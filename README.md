@@ -6,6 +6,23 @@
 
 这是一个独立运行的 Windows 工具，**不修改 MoeKoeMusic 本体**，通过监听其 WebSocket 服务（端口 6520）实时获取歌词与播放状态，并将歌词作为任务栏的子窗口进行渲染。
 
+> **插件集成说明**
+>
+> 本项目同时也是 MoeKoeMusic 的 Chrome Extension V3 插件，目录内包含 `manifest.json`、`background.js`、`popup.html` 等标准插件文件。
+>
+> **当前无法作为正常插件运行的原因：**
+>
+> 宿主 MoeKoeMusic 的安装版（`app.asar`）中未包含 `native_launcher` 自动启动所需的 IPC 方法。源码版本的 `electron/preload.cjs` 虽然暴露了 `startNativeLauncher` / `stopNativeLauncher` / `isNativeLauncherRunning` 三个 API，但安装版的 `preload.cjs` 打包在 `app.asar` 内且不支持热替换。
+>
+> 因此插件在安装版环境下只能做到：
+> - 通过 WebSocket 接收歌词与播放状态
+> - Popup 显示运行状态与控制按钮
+> - 通过 HTTP 接口停止 EXE
+> - 无法从 Popup 内部启动 EXE（Electron popup 安全限制）
+> - 无法随 MoeKoeMusic 启停（需手动启动 EXE）
+>
+> 替代方案：EXE 内置 Windows 注册表开机自启功能，双击运行一次后在托盘菜单中启用即可随系统自动启动。
+
 ## 主要特性
 
 - 零侵入：独立 EXE，与 MoeKoeMusic 完全解耦
