@@ -322,7 +322,7 @@ void WebSocketClient::ReconnectLoop() {
         // 等到连接成功 / 失败 / 停止
         for (int i = 0; i < constants::WS_CONNECT_TIMEOUT_ITERATIONS && !stopRequested_.load(); ++i) { // 5s 连接窗口
             if (connected_.load()) break;
-            std::this_thread::sleep_for(100ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(constants::RECONNECT_WAIT_GRANULARITY_MS));
         }
         if (stopRequested_.load()) break;
 
