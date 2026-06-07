@@ -214,7 +214,20 @@ void WebSocketClient::Disconnect() {
     }
 
     if (reconnectThread_.joinable()) {
-        reconnectThread_.join();
+        HANDLE hThread = reconnectThread_.native_handle();
+        if (hThread) {
+            // 等待最多 2 秒
+            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            if (waitRet == WAIT_TIMEOUT) {
+                // 超时，强制终止线程
+                TerminateThread(hThread, 0);
+                reconnectThread_.detach();
+            } else {
+                reconnectThread_.join();
+            }
+        } else {
+            reconnectThread_.join();
+        }
     }
 
     if (connected_.exchange(false)) {

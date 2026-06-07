@@ -88,7 +88,20 @@ void ProcessMonitor::Start(const std::wstring& exeName,
 void ProcessMonitor::Stop() {
     running_.store(false);
     if (monitorThread_.joinable()) {
-        monitorThread_.join();
+        HANDLE hThread = monitorThread_.native_handle();
+        if (hThread) {
+            // 等待最多 2 秒
+            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            if (waitRet == WAIT_TIMEOUT) {
+                // 超时，强制终止线程
+                TerminateThread(hThread, 0);
+                monitorThread_.detach();
+            } else {
+                monitorThread_.join();
+            }
+        } else {
+            monitorThread_.join();
+        }
     }
 }
 

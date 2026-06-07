@@ -89,7 +89,20 @@ void HttpServer::Stop() {
     }
 
     if (serverThread_.joinable()) {
-        serverThread_.join();
+        HANDLE hThread = serverThread_.native_handle();
+        if (hThread) {
+            // 等待最多 2 秒
+            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            if (waitRet == WAIT_TIMEOUT) {
+                // 超时，强制终止线程
+                TerminateThread(hThread, 0);
+                serverThread_.detach();
+            } else {
+                serverThread_.join();
+            }
+        } else {
+            serverThread_.join();
+        }
     }
 }
 

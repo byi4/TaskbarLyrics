@@ -130,6 +130,7 @@ set(SOURCES
     src/tray_icon.cpp
     src/process_monitor.cpp
     src/config_dialog.cpp
+    src/app_icon.rc
 )
 
 # 头文件目录
