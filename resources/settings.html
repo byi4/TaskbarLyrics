@@ -258,13 +258,10 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
     <div class="row">
         <label>字体</label>
-        <select id="fontFamily">
-            <option value="Microsoft YaHei UI">微软雅黑</option>
-            <option value="Segoe UI">Segoe UI</option>
-            <option value="HarmonyOS Sans">HarmonyOS Sans</option>
-            <option value="Maple Mono">Maple Mono</option>
-            <option value="Consolas">Consolas</option>
-        </select>
+        <div style="display:flex; gap:6px; align-items:center;">
+            <input type="text" id="fontFamily" style="width:118px;" readonly>
+            <button id="pickFontBtn" style="padding:5px 12px; font-size:11px;">选择</button>
+        </div>
     </div>
 
     <div class="row">
@@ -392,9 +389,22 @@ function sendToHost(msg) {
 
 // 接收 C++ 发来的消息（初始化配置）
 window.chrome.webview.addEventListener('message', (event) => {
-    const msg = JSON.parse(event.data);
+    let msg;
+    if (typeof event.data === 'string') {
+        try {
+            msg = JSON.parse(event.data);
+        } catch (e) {
+            console.error('Failed to parse message as JSON:', e, 'data:', event.data);
+            return;
+        }
+    } else {
+        // 如果不是字符串，直接用对象（可能是某些版本的 WebView2 行为）
+        msg = event.data;
+    }
     if (msg.type === 'initConfig') {
         applyConfigToUI(msg.config);
+    } else if (msg.type === 'fontSelected') {
+        document.getElementById('fontFamily').value = msg.fontFamily;
     }
 });
 
@@ -512,6 +522,10 @@ document.getElementById('resetPos').addEventListener('click', () => {
     document.getElementById('offsetY').value = 0;
     document.getElementById('offsetX').dispatchEvent(new Event('input'));
     document.getElementById('offsetY').dispatchEvent(new Event('input'));
+});
+
+document.getElementById('pickFontBtn').addEventListener('click', () => {
+    sendToHost({ type: 'pickFont' });
 });
 
 // 初始化：请求配置

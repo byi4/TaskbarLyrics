@@ -398,7 +398,7 @@ INT_PTR CALLBACK ConfigDialog::DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     switch (msg) {
     case WM_COMMAND: {
         int id = LOWORD(wParam);
-        int code = HIWORD(wParam);
+        // int code = HIWORD(wParam);
 
         switch (id) {
         case IDC_BTN_HLCOLOR: {

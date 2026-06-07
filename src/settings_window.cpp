@@ -8,6 +8,11 @@
 #include <shlobj.h>
 #include <windows.h>
 
+// 确保 LF_FACESIZE 定义（如果 wingdi.h 没定义的话）
+#ifndef LF_FACESIZE
+#define LF_FACESIZE 32
+#endif
+
 #include <WebView2.h>
 
 #include <cstdio>
@@ -20,17 +25,45 @@ namespace moekoe {
 using json = nlohmann::json;
 using Microsoft::WRL::ComPtr;
 
+constexpr UINT WM_PICK_FONT = WM_USER + 100;
+
 namespace {
 
 void DebugLog(const char* fmt, ...) {
-    const char* logPath = "D:\\MoeKoeMusic-plugin\\MoeKoeMusic-TaskbarLyrics\\debug.log";
-    FILE* f = fopen(logPath, "a");
+    // 获取 exe 所在目录，日志写入同目录下（可移植）
+    char modulePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    char* lastSlash = strrchr(modulePath, '\\');
+    if (lastSlash) *lastSlash = '\0';
+    std::string logPath = std::string(modulePath) + "\\debug.log";
+    FILE* f = fopen(logPath.c_str(), "a");
     if (!f) return;
     va_list args;
     va_start(args, fmt);
     vfprintf(f, fmt, args);
     va_end(args);
     fclose(f);
+}
+
+std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return {};
+    int len = ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    int written = ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &out[0], len);
+    if (written <= 0) return {};
+    // 因为 len 是不包括 null 终止符的字符数，所以我们不需要再处理，std::wstring 已经正确构造了
+    return out;
+}
+
+std::string WideToUtf8(const std::wstring& s) {
+    if (s.empty()) return {};
+    int len = ::WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string out(static_cast<size_t>(len), '\0');
+    int written = ::WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &out[0], len, nullptr, nullptr);
+    if (written <= 0) return {};
+    return out;
 }
 
 } // namespace
@@ -134,10 +167,9 @@ public:
     }
 
     // ICoreWebView2WebMessageReceivedEventHandler
-    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* sender,
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* /*sender*/,
                                      ICoreWebView2WebMessageReceivedEventArgs* args) override {
         LPWSTR msg = nullptr;
-        // 此版本只有 TryGetWebMessageAsString
         HRESULT hr = args->TryGetWebMessageAsString(&msg);
         if (SUCCEEDED(hr) && msg && owner_) {
             int len = WideCharToMultiByte(CP_UTF8, 0, msg, -1, nullptr, 0, nullptr, nullptr);
@@ -149,6 +181,64 @@ public:
             }
             CoTaskMemFree(msg);
         }
+        return S_OK;
+    }
+
+private:
+    SettingsWindow* owner_;
+    volatile LONG refCount_;
+};
+
+class NavigationCompletedHandler : public ICoreWebView2NavigationCompletedEventHandler {
+public:
+    NavigationCompletedHandler(SettingsWindow* owner) : owner_(owner) { refCount_ = 1; }
+
+    // IUnknown
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == __uuidof(ICoreWebView2NavigationCompletedEventHandler)) {
+            *ppv = static_cast<ICoreWebView2NavigationCompletedEventHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refCount_); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        LONG c = InterlockedDecrement(&refCount_);
+        if (c <= 0) delete this;
+        return static_cast<ULONG>(c > 0 ? c : 0);
+    }
+
+    // ICoreWebView2NavigationCompletedEventHandler
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* /*sender*/,
+                                     ICoreWebView2NavigationCompletedEventArgs* args) override {
+        BOOL isSuccess = FALSE;
+        COREWEBVIEW2_WEB_ERROR_STATUS webErrorStatus = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+        args->get_IsSuccess(&isSuccess);
+        args->get_WebErrorStatus(&webErrorStatus);
+
+        DebugLog("[SETTINGS] NavigationCompleted: success=%d, error=%d\n",
+                 static_cast<int>(isSuccess), static_cast<int>(webErrorStatus));
+
+        if (!isSuccess) {
+            DebugLog("[SETTINGS] Navigation FAILED! Error code: %d\n", webErrorStatus);
+            // 标记 WebView 初始化失败，让调用方知道需要回退
+            if (owner_) {
+                owner_->SetWebViewInitFailed();
+                MessageBoxW(owner_->GetHwnd(),
+                    L"设置页面加载失败。\n将回退到基础设置界面。",
+                    L"MoeKoe Taskbar Lyrics", MB_OK | MB_ICONWARNING);
+            }
+        } else {
+            DebugLog("[SETTINGS] Navigation OK - settings.html loaded successfully\n");
+            // 发送初始配置到 WebView
+            if (owner_) {
+                owner_->SendConfigToWebView(owner_->GetCurrentConfig());
+            }
+        }
+
         return S_OK;
     }
 
@@ -186,6 +276,10 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         self = reinterpret_cast<SettingsWindow*>(cs->lpCreateParams);
         ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         self->hwnd_ = hwnd;
+        return TRUE; // 必须返回 TRUE 才能继续创建窗口！
+    }
+    case WM_PICK_FONT: {
+        if (self) self->PickFont();
         return 0;
     }
     case WM_SIZE: {
@@ -228,12 +322,26 @@ bool SettingsWindow::Show(HINSTANCE hInstance, HWND parent, const Config& curren
     hInstance_ = hInstance;
     currentConfig_ = currentConfig;
 
+    // 加载图标
+    HICON hIcon = nullptr;
+    wchar_t exeDir[MAX_PATH] = {0};
+    ::GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
+    wchar_t* slash = wcsrchr(exeDir, L'\\');
+    if (slash) *slash = L'\0';
+    std::wstring iconPath = std::wstring(exeDir) + L"\\resources\\icon.ico";
+    hIcon = static_cast<HICON>(::LoadImageW(nullptr, iconPath.c_str(), IMAGE_ICON, 32, 32, LR_LOADFROMFILE | LR_DEFAULTSIZE));
+    if (!hIcon) {
+        hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    }
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = &WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hIcon = hIcon;
+    wc.hIconSm = hIcon;
     wc.lpszClassName = kWindowClass;
     ::RegisterClassExW(&wc);
 
@@ -241,25 +349,25 @@ bool SettingsWindow::Show(HINSTANCE hInstance, HWND parent, const Config& curren
         0, kWindowClass, L"任务栏歌词 - 设置",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 460, 620,
-        parent, nullptr, hInstance, this);
+        nullptr, nullptr, hInstance, this);
 
-    if (!hwnd_) return false;
-
-    RECT parentRect{}, windowRect{};
-    GetWindowRect(parent ? parent : GetDesktopWindow(), &parentRect);
-    GetWindowRect(hwnd_, &windowRect);
-    int x = parentRect.left + (parentRect.right - parentRect.left - (windowRect.right - windowRect.left)) / 2;
-    int y = parentRect.top + (parentRect.bottom - parentRect.top - (windowRect.bottom - windowRect.top)) / 3;
-    SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    if (!hwnd_) {
+        if (hIcon) ::DestroyIcon(hIcon);
+        return false;
+    }
 
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
 
-    // 构建 file:// URL
-    wchar_t exeDir[MAX_PATH] = {0};
-    GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
-    wchar_t* slash = wcsrchr(exeDir, L'\\');
-    if (slash) *slash = L'\0';
+    // 居中显示窗口（相对于桌面）
+    RECT desktopRect{}, windowRect{};
+    GetWindowRect(GetDesktopWindow(), &desktopRect);
+    GetWindowRect(hwnd_, &windowRect);
+    int x = (desktopRect.right - desktopRect.left - (windowRect.right - windowRect.left)) / 2;
+    int y = (desktopRect.bottom - desktopRect.top - (windowRect.bottom - windowRect.top)) / 3;
+    SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+
+    // 构建 file:// URL（复用前面获取的 exeDir）
     settingsUrl_ = std::wstring(L"file:///") + exeDir + L"\\resources\\settings.html";
     for (auto& c : settingsUrl_) { if (c == L'\\') c = L'/'; }
 
@@ -273,11 +381,17 @@ bool SettingsWindow::Show(HINSTANCE hInstance, HWND parent, const Config& curren
 
     if (FAILED(hr)) {
         DebugLog("[SETTINGS] CreateCoreWebView2EnvironmentWithOptions failed: 0x%08lX\n", hr);
+        webViewInitFailed_ = true;
         MessageBoxW(hwnd_,
-            L"无法创建 WebView2 环境。\n请确保已安装 Microsoft Edge WebView2 Runtime。",
+            L"无法创建 WebView2 环境。\n请确保已安装 Microsoft Edge WebView2 Runtime。\n将回退到基础设置界面。",
             L"MoeKoe Taskbar Lyrics", MB_OK | MB_ICONWARNING);
+        // 窗口已创建但 WebView2 不可用，返回 false 让调用方回退
+        ::DestroyWindow(hwnd_);
+        hwnd_ = nullptr;
+        return false;
     }
 
+    // Env 创建成功（异步初始化中），窗口已显示
     return true;
 }
 
@@ -306,15 +420,51 @@ void SettingsWindow::OnControllerReady(void* controller) {
     static_cast<ICoreWebView2Controller*>(controller)->get_CoreWebView2(webview.GetAddressOf());
     if (webview) {
         webView2_ = webview.Detach();
+        auto* wv = static_cast<ICoreWebView2*>(webView2_);
+        auto* wvController = static_cast<ICoreWebView2Controller*>(webView2Controller_);
 
-        static_cast<ICoreWebView2*>(webView2_)->Navigate(settingsUrl_.c_str());
+        // 0. 设置 WebView 的 Bounds 和可见性（必须做！否则窗口空白）
+        RECT clientRect{};
+        GetClientRect(hwnd_, &clientRect);
+        wvController->put_Bounds(clientRect);
+        wvController->put_IsVisible(TRUE);
 
-        EventRegistrationToken token{};
+        // 1. 验证 settings.html 是否存在
+        wchar_t htmlPath[MAX_PATH] = {0};
+        GetModuleFileNameW(nullptr, htmlPath, MAX_PATH);
+        wchar_t* slash = wcsrchr(htmlPath, L'\\');
+        if (slash) *slash = L'\0';
+        wcscat_s(htmlPath, L"\\resources\\settings.html");
+
+        DWORD attr = GetFileAttributesW(htmlPath);
+        bool htmlExists = (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
+        DebugLog("[SETTINGS] HTML path=%ls exists=%d\n", htmlPath, (int)htmlExists);
+
+        if (!htmlExists) {
+            DebugLog("[SETTINGS] ERROR: settings.html NOT FOUND!\n");
+            SetWebViewInitFailed();
+            MessageBoxW(hwnd_,
+                L"设置页面文件不存在。\n请确保 resources\\settings.html 在 exe 同级目录。\n将回退到基础设置界面。",
+                L"MoeKoe Taskbar Lyrics", MB_OK | MB_ICONWARNING);
+            return;
+        }
+
+        // 2. 注册 NavigationCompleted 事件
+        EventRegistrationToken navToken{};
+        auto* navHandler = new NavigationCompletedHandler(this);
+        wv->add_NavigationCompleted(navHandler, &navToken);
+        navHandler->Release();
+
+        // 3. 导航到 settings.html
+        wv->Navigate(settingsUrl_.c_str());
+
+        // 4. 注册 WebMessageReceived 事件
+        EventRegistrationToken msgToken{};
         auto* msgHandler = new WebMessageReceivedHandler(this);
-        static_cast<ICoreWebView2*>(webView2_)->add_WebMessageReceived(msgHandler, &token);
+        wv->add_WebMessageReceived(msgHandler, &msgToken);
         msgHandler->Release();
 
-        DebugLog("[SETTINGS] WebView2 ready\n");
+        DebugLog("[SETTINGS] WebView2 ready, navigating to settings.html...\n");
     }
 }
 
@@ -326,18 +476,49 @@ void SettingsWindow::OnWebMessageReceived(const std::string& jsonStr) {
         DebugLog("[SETTINGS] recv: type=%s\n", type.c_str());
 
         if (type == "getConfig") {
-            SendConfigToWebView(currentConfig_);
-        } else if (type == "saveConfig") {
-            if (msg.contains("config")) {
-                ApplyConfigFromJson(reinterpret_cast<void*>(&msg["config"]));
-                currentConfig_.Save();
-                if (onConfigChanged_) onConfigChanged_(currentConfig_);
-            }
-        } else if (type == "close") {
+        SendConfigToWebView(currentConfig_);
+    } else if (type == "saveConfig") {
+        if (msg.contains("config")) {
+            ApplyConfigFromJson(reinterpret_cast<void*>(&msg["config"]));
+            currentConfig_.Save();
+            if (onConfigChanged_) onConfigChanged_(currentConfig_);
             Close();
         }
+    } else if (type == "pickFont") {
+        ::PostMessage(hwnd_, WM_PICK_FONT, 0, 0);
+    } else if (type == "close") {
+        Close();
+    }
     } catch (const std::exception& e) {
         DebugLog("[SETTINGS] OnWebMessage error: %s\n", e.what());
+    }
+}
+
+void SettingsWindow::PickFont() {
+    LOGFONTW lf{};
+    // 安全初始化lf.lfFaceName，截断过长的字符串
+    std::wstring wFont = Utf8ToWide(currentConfig_.Appearance().fontFamily);
+    if (wFont.size() >= LF_FACESIZE) {
+        wFont.resize(LF_FACESIZE - 1);
+    }
+    wcscpy_s(lf.lfFaceName, LF_FACESIZE, wFont.c_str());
+    lf.lfHeight = -14;
+
+    CHOOSEFONTW cf{};
+    cf.lStructSize = sizeof(cf);
+    cf.hwndOwner = hwnd_;
+    cf.lpLogFont = &lf;
+    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS;
+
+    if (::ChooseFontW(&cf)) {
+        // 更新SettingsWindow的currentConfig_
+        currentConfig_.MutableAppearance().fontFamily = WideToUtf8(lf.lfFaceName);
+        // 把选中的字体发给WebView
+        json j{};
+        j["type"] = "fontSelected";
+        j["fontFamily"] = currentConfig_.Appearance().fontFamily;
+        std::wstring jsonW = Utf8ToWide(j.dump());
+        static_cast<ICoreWebView2*>(webView2_)->PostWebMessageAsJson(jsonW.c_str());
     }
 }
 
@@ -404,7 +585,7 @@ void SettingsWindow::SendConfigToWebView(const Config& cfg) {
     };
 
     std::string jsonStr = j.dump();
-    std::wstring wStr(jsonStr.begin(), jsonStr.end());
+    std::wstring wStr = Utf8ToWide(jsonStr);
     static_cast<ICoreWebView2*>(webView2_)->PostWebMessageAsJson(wStr.c_str());
     DebugLog("[SETTINGS] sent initConfig\n");
 }

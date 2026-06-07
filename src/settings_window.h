@@ -33,9 +33,16 @@ public:
 
     // WebView2 是否已成功初始化并加载了页面
     bool IsWebViewReady() const { return webView2_ != nullptr; }
+    bool IsWebViewInitFailed() const { return webViewInitFailed_; }
 
     // 注册配置变更回调（JS 点"应用并保存"时触发）
     void OnConfigChanged(ConfigChangedCallback cb) { onConfigChanged_ = std::move(cb); }
+
+    // 标记 WebView 初始化失败（由 NavigationCompleted 调用）
+    void SetWebViewInitFailed() { webViewInitFailed_ = true; }
+
+    // 获取窗口句柄（供 COM 回调类使用）
+    HWND GetHwnd() const { return hwnd_; }
 
     // 是否正在显示
     bool IsVisible() const;
@@ -43,12 +50,16 @@ public:
     // 关闭窗口
     void Close();
 
+    // 获取当前配置（供 NavigationCompletedHandler 发送到 WebView）
+    const Config& GetCurrentConfig() const { return currentConfig_; }
+
     // WebView2 异步回调（由 COM 回调类调用）
     void OnEnvironmentReady(void* env);
     void OnControllerReady(void* controller);
     void OnWebMessageReceived(const std::string& json);
     void SendConfigToWebView(const Config& cfg);
     void ApplyConfigFromJson(void* jsonPtr);
+    void PickFont();
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -64,6 +75,7 @@ private:
     std::wstring settingsUrl_;
     Config currentConfig_;
     ConfigChangedCallback onConfigChanged_;
+    bool webViewInitFailed_{false};  // WebView2 初始化是否失败（导航/加载等）
 
     static constexpr const wchar_t* kWindowClass = L"MoeKoeTaskbarLyricsSettingsClass";
 };

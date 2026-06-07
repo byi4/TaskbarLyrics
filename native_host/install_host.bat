@@ -9,9 +9,16 @@ set "SCRIPT_DIR=%~dp0"
 set "HOST_DIR=%SCRIPT_DIR%.."
 set "MANIFEST_PATH=%HOST_DIR%\native_host\moekoe_taskbar_lyrics.json"
 
-:: 获取插件 Extension ID（需要从 MoeKoeMusic 获取）
-:: 临时占位符，需要用户手动替换或从 MoeKoeMusic 读取
-set "EXTENSION_ID=EXTENSION_ID_PLACEHOLDER"
+:: 获取插件 Extension ID（Chrome Extension 的 ID）
+:: 格式示例: abcdefghijklmnopqrstuvwxyzabcdef
+echo.
+echo 请输入 Chrome Extension ID（可在 MoeKoeMusic 插件页面或 chrome://extensions 查看）:
+set /p "EXTENSION_ID=Extension ID> "
+if "%EXTENSION_ID%"=="" (
+    echo [错误] Extension ID 不能为空！
+    pause
+    exit /b 1
+)
 
 :: 更新 manifest 中的 allowed_origins
 echo 正在更新 manifest...

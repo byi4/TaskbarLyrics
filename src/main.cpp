@@ -94,6 +94,11 @@ void ApplyRendererSettings(AppContext& app) {
     rs.fontSize          = app.config->Appearance().fontSize;
     rs.enableKaraoke     = app.config->Appearance().enableKaraoke;
     rs.enableTranslation = app.config->Appearance().enableTranslation;
+
+    DebugLog("[CONFIG] ApplyRenderer: hl=%s nl=%s font=%s size=%d opacity=%.2f\n",
+        rs.highlightColor.c_str(), rs.normalColor.c_str(),
+        rs.fontFamily.c_str(), rs.fontSize, rs.normalOpacity);
+
     app.renderer->ApplySettings(rs);
 }
 
@@ -137,13 +142,14 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         if (!app.settingsWindow) {
             app.settingsWindow = new moekoe::SettingsWindow();
             app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
+                // 将 WebView2 设置界面更新的配置同步到主 config 对象
+                *app.config = cfg;
                 ApplyRendererSettings(app);
                 if (app.taskbarWindow) {
                     app.taskbarWindow->SetDragOffset(
                         cfg.Position().offsetX, cfg.Position().offsetY);
                     app.taskbarWindow->Reposition();
                 }
-                app.config->Save();
                 DebugLog("[SETTINGS] Config applied and saved\n");
             });
         }
@@ -413,6 +419,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     // 9) 初始化渲染器
     moekoe::TaskbarRenderer renderer;
+    app.renderer = &renderer;
     ApplyRendererSettings(app);
     if (!renderer.Initialize(taskbarWindow.GetHandle())) {
         ::MessageBoxW(nullptr,

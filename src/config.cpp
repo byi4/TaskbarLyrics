@@ -13,6 +13,25 @@
 
 namespace moekoe {
 
+namespace {
+
+void ConfigDebugLog(const char* fmt, ...) {
+    char modulePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    char* lastSlash = strrchr(modulePath, '\\');
+    if (lastSlash) *lastSlash = '\0';
+    std::string logPath = std::string(modulePath) + "\\debug.log";
+    FILE* f = fopen(logPath.c_str(), "a");
+    if (!f) return;
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fclose(f);
+}
+
+} // namespace
+
 using json = nlohmann::json;
 
 Config::Config() = default;
@@ -34,9 +53,11 @@ std::string Config::GetAutoStartRegistryKey() {
 
 bool Config::Load() {
     const std::string path = GetConfigPath();
+    ConfigDebugLog("[CONFIG] Load() path=%s\n", path.c_str());
+
     std::ifstream in(path);
     if (!in.is_open()) {
-        // 文件不存在 -> 写默认值
+        ConfigDebugLog("[CONFIG] File not found, saving defaults\n");
         return Save();
     }
 
@@ -70,8 +91,15 @@ bool Config::Load() {
             position_.offsetX = p.value("offset_x", position_.offsetX);
             position_.offsetY = p.value("offset_y", position_.offsetY);
         }
-    } catch (const std::exception&) {
-        // 解析失败 -> 恢复默认值
+
+        // 打印加载结果
+        ConfigDebugLog("[CONFIG] Loaded: hl=%s nl=%s font=%s size=%d opacity=%.2f karaoke=%d trans=%d\n",
+            appearance_.highlightColor.c_str(), appearance_.normalColor.c_str(),
+            appearance_.fontFamily.c_str(), appearance_.fontSize, appearance_.normalOpacity,
+            (int)appearance_.enableKaraoke, (int)appearance_.enableTranslation);
+
+    } catch (const std::exception& e) {
+        ConfigDebugLog("[CONFIG] JSON parse error: %s, saving defaults\n", e.what());
         return Save();
     }
     return true;

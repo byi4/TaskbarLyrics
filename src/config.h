@@ -13,7 +13,7 @@
 namespace moekoe {
 
 struct AppearanceConfig {
-    std::string highlightColor{"#000000"};
+    std::string highlightColor{"#4CC2FF"};
     std::string normalColor{"#333333"};
     double      normalOpacity{0.85};
     std::string fontFamily{"Microsoft YaHei UI"};

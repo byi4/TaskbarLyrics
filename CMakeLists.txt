@@ -204,7 +204,8 @@ if(MSVC)
             "${PLUGIN_DIR}/MoeKoeTaskbarLyrics.exe"
         COMMENT "Copying EXE to MoeKoeMusic plugin directory")
 
-    # 复制 WebView2Loader.dll 到输出目录（WebView2 运行时依赖）
+    # 复制运行时 DLL 到输出目录
+    # 1) WebView2Loader.dll（WebView2 运行时依赖）
     if(WEBVIEW2_LOADER_LIB)
         get_filename_component(WEBVIEW2_DLL_DIR "${WEBVIEW2_LOADER_LIB}" DIRECTORY)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -212,5 +213,30 @@ if(MSVC)
                 "${WEBVIEW2_DLL_DIR}/WebView2Loader.dll"
                 $<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll
             COMMENT "Copying WebView2Loader.dll to output directory")
+    else()
+        # 回退：尝试常见安装路径
+        find_file(WEBVIEW2_LOADER_DLL WebView2Loader.dll
+            PATHS
+                "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/x64"
+                "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
+                "C:/Program Files (x86)/Microsoft/Edge WebView2"
+            NO_DEFAULT_PATH)
+        if(WEBVIEW2_LOADER_DLL)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${WEBVIEW2_LOADER_DLL}"
+                    $<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll
+                COMMENT "Copying WebView2Loader.dll to output directory")
+        endif()
+    endif()
+
+    # 2) z.dll（zlib 运行时依赖）
+    find_file(ZLIB_RUNTIME_DLL z.dll PATHS "${VCPKG_INSTALLED_DIR}/bin" NO_DEFAULT_PATH)
+    if(ZLIB_RUNTIME_DLL)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ZLIB_RUNTIME_DLL}"
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>/z.dll
+            COMMENT "Copying z.dll to output directory")
     endif()
 endif()

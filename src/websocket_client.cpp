@@ -28,7 +28,6 @@ void DebugLog(const std::string& msg);
 LyricsData ParseKrc(const std::string& krcText) {
     LyricsData data;
     if (krcText.empty()) {
-        DebugLog("ParseKrc: input empty");
         return data;
     }
 
@@ -46,9 +45,6 @@ LyricsData ParseKrc(const std::string& krcText) {
         }
     }
 
-    DebugLog("ParseKrc: input len=" + std::to_string(krcText.size()) +
-             " normalized_len=" + std::to_string(normalized.size()));
-
     std::istringstream stream(normalized);
     std::string line;
     int lineCount = 0;
@@ -59,30 +55,18 @@ LyricsData ParseKrc(const std::string& krcText) {
         ++lineCount;
         if (line.empty()) continue;
         if (line[0] != '[') {
-            if (lineCount <= 10) {
-                DebugLog("ParseKrc: line#" + std::to_string(lineCount) +
-                         " not start with [, first20=" + line.substr(0, 20));
-            }
             continue;
         }
 
         // 跳过元数据头: [ti:...], [ar:...], [al:...], [by:...], [offset:...]
         if (line.size() > 2 && !std::isdigit(static_cast<unsigned char>(line[1]))) {
             ++skippedMeta;
-            if (skippedMeta <= 5) {
-                DebugLog("ParseKrc: skip meta line#" + std::to_string(lineCount) +
-                         " tag=" + line.substr(0, std::min<size_t>(20, line.size())));
-            }
             continue;
         }
-
-        DebugLog("ParseKrc: processing lyric line#" + std::to_string(lineCount) +
-                 " first40=" + line.substr(0, std::min<size_t>(40, line.size())));
 
         // 找到 ']' 提取时间戳
         auto closeBracket = line.find(']');
         if (closeBracket == std::string::npos || closeBracket < 3) {
-            DebugLog("ParseKrc: line#" + std::to_string(lineCount) + " no close bracket");
             continue;
         }
 
@@ -90,7 +74,6 @@ LyricsData ParseKrc(const std::string& krcText) {
         std::string timingStr = line.substr(1, closeBracket - 1);
         auto commaPos = timingStr.find(',');
         if (commaPos == std::string::npos) {
-            DebugLog("ParseKrc: line#" + std::to_string(lineCount) + " no comma in timing");
             continue;
         }
 
@@ -98,7 +81,6 @@ LyricsData ParseKrc(const std::string& krcText) {
         try {
             lineStartMs = std::stoll(timingStr.substr(0, commaPos));
         } catch (...) {
-            DebugLog("ParseKrc: line#" + std::to_string(lineCount) + " stoll failed");
             continue;
         }
 
@@ -165,17 +147,7 @@ LyricsData ParseKrc(const std::string& krcText) {
         lyricLine.text = fullText;
         data.lines.push_back(std::move(lyricLine));
         ++parsedLines;
-
-        if (parsedLines <= 3) {
-            DebugLog("ParseKrc: parsed line#" + std::to_string(parsedLines) +
-                     " text='" + fullText + "' chars=" + std::to_string(charCount));
-        }
     }
-
-    DebugLog("ParseKrc: total_lines=" + std::to_string(lineCount) +
-             " skipped_meta=" + std::to_string(skippedMeta) +
-             " parsed=" + std::to_string(parsedLines) +
-             " data_lines=" + std::to_string(data.lines.size()));
 
     data.valid = !data.lines.empty();
     return data;
@@ -314,7 +286,6 @@ void WebSocketClient::ReconnectLoop() {
                     self->connected_.store(false);
                     if (self->onStatus_) self->onStatus_(false);
                 } else if (msg->type == ix::WebSocketMessageType::Message) {
-                    DebugLog("WS: message received (" + std::to_string(msg->str.size()) + " bytes)");
                     if (!msg->str.empty()) {
                         try {
                             self->DispatchWsMessage(msg->str);
@@ -332,12 +303,9 @@ void WebSocketClient::ReconnectLoop() {
             });
 
         // 启动（同步）—— ix::WebSocket::start 内部会启动线程
-        DebugLog("Reconnect: calling client->start()");
         client_->start();
-        DebugLog("Reconnect: client->start() returned");
 
         // 等到连接成功 / 失败 / 停止
-        DebugLog("Reconnect: waiting up to 5s for connection...");
         for (int i = 0; i < 50 && !stopRequested_.load(); ++i) { // 5s 连接窗口
             if (connected_.load()) break;
             std::this_thread::sleep_for(100ms);
@@ -370,15 +338,6 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
         return;
     }
     const std::string type = j.value("type", "");
-    DebugLog("Dispatch: type=" + type + " data_keys=" + [&]{
-        std::string k;
-        if (j.contains("data") && j["data"].is_object()) {
-            for (auto& [key,_] : j["data"].items()) { k += key + ","; }
-        } else if (j.contains("data") && j["data"].is_array()) {
-            k = "array[" + std::to_string(j["data"].size()) + "]";
-        }
-        return k;
-    }());
 
     if (type == "lyrics") {
         LyricsData data;
@@ -392,15 +351,10 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
             if (ld.is_array()) {
                 lyricsArray = ld;
                 hasLD = true;
-                DebugLog("Dispatch: lyricsData is array, size=" + std::to_string(ld.size()));
             } else if (ld.is_string()) {
                 std::string ldStr = ld.get<std::string>();
-                DebugLog("Dispatch: lyricsData is string, len=" + std::to_string(ldStr.size()) +
-                         " first100=" + ldStr.substr(0, 100));
                 data = ParseKrc(ldStr);
                 hasLD = data.valid;
-                DebugLog("Dispatch: krc parsed, lines=" + std::to_string(data.lines.size()) +
-                         " valid=" + (data.valid?"Y":"N"));
             } else {
                 DebugLog("Dispatch: lyricsData unexpected type=" + std::to_string(static_cast<int>(ld.type())));
             }
@@ -435,11 +389,6 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
             // KRC 格式已经在上面 ParseKrc 中处理完毕，跳过此循环
             for (const auto& lineJson : lyricsArray) {
                 LyricLine line;
-                if (data.lines.empty()) {
-                    std::string sample = lineJson.dump();
-                    if (sample.size() > 300) sample = sample.substr(0, 300) + "...";
-                    DebugLog("Dispatch: first line sample: " + sample);
-                }
                 line.text       = lineJson.value("text",       "");
                 line.translated = lineJson.value("translated", "");
 
@@ -458,7 +407,6 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
             }
         }
         data.valid = !data.lines.empty();
-        DebugLog("Dispatch: lyrics parsed, lines=" + std::to_string(data.lines.size()) + " valid=" + (data.valid?"Y":"N"));
         try { if (onLyrics_) onLyrics_(data); } catch (...) { DebugLog("Dispatch: onLyrics_ exception"); }
     } else if (type == "playerState") {
         PlayerState st;
@@ -468,7 +416,6 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
             st.currentTime = d.value("currentTime", 0.0);
             st.songTitle   = d.value("songTitle",   "");
         }
-        DebugLog("Dispatch: playerState received, isPlaying=" + std::to_string(st.isPlaying) + " currentTime=" + std::to_string(st.currentTime) + " song=" + st.songTitle);
         try { if (onState_) onState_(st); } catch (...) { DebugLog("Dispatch: onState_ exception"); }
     } else if (type == "welcome") {
         // 服务器欢迎消息,忽略

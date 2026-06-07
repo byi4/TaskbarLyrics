@@ -195,23 +195,6 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         }
     }
 
-    // 调试
-    {
-        FILE* f = fopen("D:\\MoeKoeMusic-plugin\\MoeKoeMusic-TaskbarLyrics\\debug.log", "a");
-        if (f) {
-            fprintf(f, "[TASKBAR] children=%zu tbRect=(%ld,%ld,%ld,%ld) pos=%d\n",
-                    children.size(), tbRect.left, tbRect.top, tbRect.right, tbRect.bottom,
-                    static_cast<int>(info_.position));
-            for (size_t i = 0; i < children.size() && i < 10; i++) {
-                fprintf(f, "[TASKBAR]   child[%zu] class=%ls rect=(%ld,%ld,%ld,%ld)\n",
-                        i, children[i].className.c_str(),
-                        children[i].rect.left, children[i].rect.top,
-                        children[i].rect.right, children[i].rect.bottom);
-            }
-            fclose(f);
-        }
-    }
-
     switch (info_.position) {
     case TaskbarPosition::BOTTOM: {
         // 底部任务栏: 歌词定位在右侧（紧靠托盘左侧），不覆盖最小化窗口区域
@@ -274,16 +257,6 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         hwnd_, HWND_TOPMOST,
         x, y, w, h,
         SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-
-    // 调试
-    {
-        FILE* f = fopen("D:\\MoeKoeMusic-plugin\\MoeKoeMusic-TaskbarLyrics\\debug.log", "a");
-        if (f) {
-            fprintf(f, "[TASKBAR] final screen pos: x=%d y=%d w=%d h=%d foundTaskList=%d foundTray=%d foundRebar=%d\n",
-                    x, y, w, h, foundTaskList, foundTray, foundRebar);
-            fclose(f);
-        }
-    }
 }
 
 void TaskbarWindow::CheckResize() {
