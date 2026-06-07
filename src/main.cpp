@@ -3,6 +3,7 @@
 //
 #include "config.h"
 #include "config_dialog.h"
+#include "constants.h"
 #include "http_server.h"
 #include "settings_window.h"
 #include "lyrics_data.h"
@@ -70,13 +71,15 @@ struct AppContext {
     bool                     boundMode{false};
 };
 
+using namespace moekoe::constants;
+
 // 工具: 把 UTF-8 字符串限制到 Windows Tooltip 长度
 std::wstring ToTooltipWide(const std::string& s) {
     if (s.empty()) return {};
     int len = ::MultiByteToWideChar(CP_UTF8, 0, s.data(),
                                     static_cast<int>(s.size()), nullptr, 0);
     if (len <= 0) return {};
-    if (len > 127) len = 127;
+    if (len > WINDOWS_TOOLTIP_MAX_LEN) len = WINDOWS_TOOLTIP_MAX_LEN;
     std::wstring out(static_cast<size_t>(len), L'\0');
     ::MultiByteToWideChar(CP_UTF8, 0, s.data(),
                           static_cast<int>(s.size()), &out[0], len);
@@ -214,7 +217,7 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         ::PostQuitMessage(0);
         return 0;
 
-    case WM_USER + 0x200: { // 托盘回调
+    case WM_TRAY_CALLBACK: { // 托盘回调
         if (app->tray) app->tray->OnTrayMessage(hwnd, wParam, lParam);
         return 0;
     }
@@ -228,14 +231,24 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case moekoe::TaskbarWindow::WM_FRAME_TICK:
     case WM_TIMER: {
         try {
+            // ═══════ 帧渲染流程 ═══════
+            // 1. 检测任务栏尺寸变化（每帧检查一次，用于响应 DPI 变化）
             if (app->taskbarWindow) app->taskbarWindow->CheckResize();
+
+            // 2. 从歌词解析器获取当前应渲染的状态
             if (app->parser && app->renderer) {
                 auto state = app->parser->GetCurrentRenderState();
+
+                // 3. 附加 UI 状态（悬停/拖动，用于判断是否显示控制按钮）
                 if (app->taskbarWindow) {
                     state.isHovering = app->taskbarWindow->IsHovering();
                     state.isDragging = app->taskbarWindow->IsDragging();
                 }
+
+                // 4. 执行渲染（Direct2D 绘制）
                 app->renderer->Render(state);
+
+                // 5. 更新托盘提示文本（实时显示当前歌词）
                 if (app->tray && state.hasLyrics) {
                     auto tip = ToTooltipWide(state.currentLine);
                     if (!tip.empty()) {
@@ -245,13 +258,28 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
         } catch (const std::exception& e) {
             DebugLog("[CRASH] WM_TIMER exception: %s\n", e.what());
+            // 恢复策略：尝试重置渲染器状态
+            if (app->renderer) {
+                try {
+                    app->renderer->Shutdown();
+                    if (app->taskbarWindow)
+                        app->renderer->Initialize(app->taskbarWindow->GetHandle());
+                    DebugLog("[RECOVER] Renderer reset succeeded\n");
+                } catch (...) {
+                    DebugLog("[FATAL] Renderer recovery failed, shutting down\n");
+                    app->running = false;
+                    ::PostQuitMessage(0);
+                }
+            }
         } catch (...) {
-            DebugLog("[CRASH] WM_TIMER unknown exception\n");
+            DebugLog("[CRASH] WM_TIMER unknown exception, shutting down\n");
+            app->running = false;
+            ::PostQuitMessage(0);
         }
         return 0;
     }
 
-    case WM_USER + 0x300: {
+    case WM_RENDER_UPDATE: {
         try {
             if (app->parser && app->renderer && app->taskbarWindow) {
                 auto state = app->parser->GetCurrentRenderState();
@@ -264,7 +292,7 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     // 绑定模式：MoeKoeMusic 进程退出时自动退出
-    case WM_USER + 0x400: {
+    case WM_PROCESS_EXITED: {
         DebugLog("[BOUND] MoeKoeMusic exited, shutting down\n");
         app->running = false;
         ::PostQuitMessage(0);
@@ -298,16 +326,13 @@ static LONG WINAPI GlobalExceptionHandler(EXCEPTION_POINTERS* ep) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nShow*/) {
-    // 初始化日志路径（EXE 所在目录）
+    // ═══════ 第 1 阶段：系统初始化 ═══════
+    // 目的：为应用提供运行时基础（COM、异常处理、日志、单实例保护）
     InitLogPath();
-
-    // COM 初始化 (WIC 需要)
-    ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-
-    // 全局异常过滤器
+    ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // WIC/Direct2D 需要 COM
     ::SetUnhandledExceptionFilter(GlobalExceptionHandler);
 
-    // 单实例检查
+    // 单实例保护：避免多个进程竞争任务栏窗口导致闪烁/消息丢失
     ::CreateMutexW(nullptr, FALSE, L"MoeKoeTaskbarLyrics_Mutex");
     if (::GetLastError() == ERROR_ALREADY_EXISTS) {
         return 0;
@@ -315,29 +340,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     DebugLog("[STARTUP] WinMain entered\n");
 
-    // 0) 初始化 Winsock（ixwebsocket 依赖）
+    // Winsock 初始化（ixwebsocket 依赖）
     WSADATA wsaData;
     int wsRet = WSAStartup(MAKEWORD(2, 2), &wsaData);
     DebugLog("[STARTUP] WSAStartup ret=%d\n", wsRet);
 
-    // 1) 声明 DPI 感知(Per-Monitor V2)
+    // DPI 感知：Per-Monitor V2，支持多显示器不同缩放
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    // 2) 加载配置
+    // ═══════ 第 2 阶段：应用初始化 ═══════
+    // 目的：加载配置、创建消息窗口和托盘图标
     moekoe::Config config;
     config.Load();
     DebugLog("[STARTUP] Config loaded\n");
+    config.SetAutoStart(config.IsAutoStart());  // 同步开机自启注册表
 
-    // 同步开机自启注册表
-    config.SetAutoStart(config.IsAutoStart());
-
-    // 3) 注册消息窗口类
     if (!RegisterMessageClass(hInstance)) {
         std::fprintf(stderr, "[Error] RegisterClassExW failed\n");
         return 1;
     }
 
-    // 4) 创建隐式消息窗口
     HWND hMsgWnd = ::CreateWindowExW(
         0, L"MoeKoeTaskbarLyricsMsg", L"",
         0, 0, 0, 0, 0,
@@ -347,7 +369,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         return 1;
     }
 
-    // 检测绑定模式
     bool boundMode = moekoe::ProcessMonitor::IsBoundMode();
     DebugLog("[STARTUP] Bound mode: %s\n", boundMode ? "YES" : "NO");
 
@@ -358,7 +379,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     app.boundMode = boundMode;
     ::SetWindowLongPtrW(hMsgWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
 
-    // 5) 创建系统托盘
+    // ═══════ 第 3 阶段：业务模块初始化 ═══════
+    // 目的：创建核心业务逻辑模块（任务栏窗口、渲染引擎、WebSocket、HTTP服务器）
+    // 创建系统托盘
     moekoe::TrayIcon tray;
     app.tray = &tray;
     tray.Initialize(hInstance, hMsgWnd);
@@ -478,7 +501,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     // 注册悬停状态变化回调
     taskbarWindow.OnHoverChanged([&]() {
-        ::PostMessageW(hMsgWnd, WM_USER + 0x300, 0, 0);
+        ::PostMessageW(hMsgWnd, WM_RENDER_UPDATE, 0, 0);
     });
 
     char url[64];
@@ -497,7 +520,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
             ::PostQuitMessage(0);
         }
     });
-    const int httpPort = 6523; // popup.js 固定使用此端口
+    const int httpPort = HTTP_SERVER_PORT; // popup.js 固定使用此端口
     if (httpServer.Start(httpPort)) {
         DebugLog("[STARTUP] HTTP server started on port %d\n", httpPort);
     } else {
@@ -511,16 +534,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         processMonitor.Start(L"MoeKoeMusic.exe",
             /*onStarted*/ []() {},
             /*onExited*/ [hMsgWnd]() {
-                ::PostMessageW(hMsgWnd, WM_USER + 0x400, 0, 0);
+                ::PostMessageW(hMsgWnd, WM_PROCESS_EXITED, 0, 0);
             });
         DebugLog("[STARTUP] Process monitor started (bound mode)\n");
     }
 
     // 启动帧定时器
-    const int intervalMs = std::max(15, 1000 / std::max(1, config.Advanced().refreshRateHz));
+    const int intervalMs = std::max(MIN_FRAME_INTERVAL_MS, 1000 / std::max(1, config.Advanced().refreshRateHz));
     ::SetTimer(hMsgWnd, /*id*/1, static_cast<UINT>(intervalMs), nullptr);
 
-    // 12) 消息循环
+    // ═══════ 第 4 阶段：业务逻辑循环 ═══════
+    // 目的：处理消息和事件，直到应用关闭
     MSG msg{};
     while (app.running && ::GetMessageW(&msg, nullptr, 0, 0)) {
         ::TranslateMessage(&msg);
@@ -528,7 +552,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     }
     DebugLog("[SHUTDOWN] Message loop ended\n");
 
-    // 13) 清理
+    // ═══════ 第 5 阶段：清理和退出 ═══════
+    // 目的：释放所有资源，进行优雅关闭
+    // 注意：顺序与初始化相反（后创建的先销毁）
     ::KillTimer(hMsgWnd, 1);
     httpServer.Stop();
     processMonitor.Stop();

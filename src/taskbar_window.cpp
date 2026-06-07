@@ -3,6 +3,7 @@
 // Win11 兼容方案: 独立浮动窗口覆盖在任务栏上方
 // (类似 TrafficMonitor / TranslucentTB 的实现方式)
 #include "taskbar_window.h"
+#include "constants.h"
 
 #include <shellapi.h>
 #include <windows.h>
@@ -161,7 +162,7 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
     }
 
     // 歌词区尺寸
-    const int lyricH = ::MulDiv(28, info_.dpi, 96);
+    const int lyricH = ::MulDiv(constants::LYRIC_HEIGHT_BASE_DP, info_.dpi, 96);
     int w = 0, h = lyricH, x = 0, y = 0;
 
     // 找到关键子窗口的位置 (屏幕坐标)
@@ -202,13 +203,13 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         if (foundTray) rightEdge = trayRect.left;
 
         // 歌词窗口最大宽度
-        const int maxLyricWidth = ::MulDiv(360, info_.dpi, 96);
+        const int maxLyricWidth = ::MulDiv(constants::MAX_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
         int availableWidth = rightEdge - tbRect.left;
         if (foundTaskList) {
             availableWidth = rightEdge - taskListRect.right;
         }
 
-        w = std::min(maxLyricWidth, std::max(availableWidth, 100));
+        w = std::min(maxLyricWidth, std::max(availableWidth, constants::MIN_LYRIC_AVAILABLE_WIDTH));
         x = rightEdge - w + dragOffsetX_;
         y = tbRect.top + dragOffsetY_;
         h = tbHeight;
@@ -218,27 +219,27 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         int rightEdge = tbRect.right;
         if (foundTray) rightEdge = trayRect.left;
 
-        const int maxLyricWidth = ::MulDiv(360, info_.dpi, 96);
+        const int maxLyricWidth = ::MulDiv(constants::MAX_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
         int availableWidth = rightEdge - tbRect.left;
         if (foundTaskList) {
             availableWidth = rightEdge - taskListRect.right;
         }
 
-        w = std::min(maxLyricWidth, std::max(availableWidth, 100));
+        w = std::min(maxLyricWidth, std::max(availableWidth, constants::MIN_LYRIC_AVAILABLE_WIDTH));
         x = rightEdge - w + dragOffsetX_;
         y = tbRect.top + dragOffsetY_;
         h = tbHeight;
         break;
     }
     case TaskbarPosition::LEFT: {
-        w = ::MulDiv(180, info_.dpi, 96);
+        w = ::MulDiv(constants::VERTICAL_TASKBAR_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
         x = tbRect.right - w;
         y = tbRect.top;
         h = tbHeight;
         break;
     }
     case TaskbarPosition::RIGHT: {
-        w = ::MulDiv(180, info_.dpi, 96);
+        w = ::MulDiv(constants::VERTICAL_TASKBAR_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
         x = tbRect.left;
         y = tbRect.top;
         h = tbHeight;
@@ -249,7 +250,7 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         break;
     }
 
-    w = std::max(w, 50);
+    w = std::max(w, constants::MIN_WINDOW_WIDTH);
     h = std::max(h, lyricH);
 
     // 使用屏幕坐标定位独立窗口

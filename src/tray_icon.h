@@ -10,6 +10,8 @@
 
 #include <windows.h>
 
+#include "constants.h"
+
 #include <functional>
 #include <string>
 
@@ -38,7 +40,7 @@ public:
 
     // 初始化并显示托盘图标
     bool Initialize(HINSTANCE hInstance, HWND messageWnd = nullptr,
-                    UINT callbackMsg = WM_USER + 0x200);
+                    UINT callbackMsg = WM_TRAY_CALLBACK);
 
     // 反初始化
     void Shutdown();

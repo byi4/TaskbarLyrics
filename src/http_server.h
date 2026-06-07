@@ -14,6 +14,8 @@
 #include <string>
 #include <thread>
 
+#include "constants.h"
+
 namespace moekoe {
 
 class HttpServer {
@@ -28,7 +30,7 @@ public:
     HttpServer& operator=(const HttpServer&) = delete;
 
     // 启动服务器（异步，返回是否成功启动）
-    bool Start(int port = 6523);
+    bool Start(int port = moekoe::constants::HTTP_SERVER_PORT);
 
     // 停止服务器
     void Stop();

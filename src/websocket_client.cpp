@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // websocket_client.cpp - WebSocket 客户端实现
 #include "websocket_client.h"
+#include "constants.h"
 
 #include <ixwebsocket/IXWebSocket.h>
 #include <nlohmann/json.hpp>
@@ -216,8 +217,8 @@ void WebSocketClient::Disconnect() {
     if (reconnectThread_.joinable()) {
         HANDLE hThread = reconnectThread_.native_handle();
         if (hThread) {
-            // 等待最多 2 秒
-            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            // 等待最多 THREAD_JOIN_TIMEOUT_MS 毫秒
+            DWORD waitRet = WaitForSingleObject(hThread, constants::THREAD_JOIN_TIMEOUT_MS);
             if (waitRet == WAIT_TIMEOUT) {
                 // 超时，强制终止线程
                 TerminateThread(hThread, 0);
@@ -255,7 +256,7 @@ void WebSocketClient::ReconnectLoop() {
     while (!stopRequested_.load()) {
         // 如果已连接,持续监控
         if (connected_.load() && client_) {
-            std::this_thread::sleep_for(200ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(constants::WS_CONNECTED_POLL_MS));
             continue;
         }
 
@@ -263,11 +264,11 @@ void WebSocketClient::ReconnectLoop() {
         const int waitSec = BackoffSeconds(attempt++);
         DebugLog("Reconnect: waiting " + std::to_string(waitSec) + "s (attempt " + std::to_string(attempt-1) + ")");
         for (int i = 0; i < waitSec * 10 && !stopRequested_.load() && !reconnectNow_.load(); ++i) {
-            std::this_thread::sleep_for(100ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(constants::RECONNECT_WAIT_GRANULARITY_MS));
         }
         if (stopRequested_.load()) break;
         reconnectNow_.store(false);
-        if (attempt > 5) attempt = 5; // 上限 15 秒
+        if (attempt > constants::MAX_RECONNECT_ATTEMPTS) attempt = constants::MAX_RECONNECT_ATTEMPTS; // 上限 15 秒
 
         // 取出当前 URL
         std::string urlCopy;
@@ -319,7 +320,7 @@ void WebSocketClient::ReconnectLoop() {
         client_->start();
 
         // 等到连接成功 / 失败 / 停止
-        for (int i = 0; i < 50 && !stopRequested_.load(); ++i) { // 5s 连接窗口
+        for (int i = 0; i < constants::WS_CONNECT_TIMEOUT_ITERATIONS && !stopRequested_.load(); ++i) { // 5s 连接窗口
             if (connected_.load()) break;
             std::this_thread::sleep_for(100ms);
         }

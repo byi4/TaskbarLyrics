@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // http_server.cpp - 极简 HTTP 服务器实现
 #include "http_server.h"
+#include "constants.h"
 
 #include <cstdio>
 #include <cstring>
@@ -91,8 +92,8 @@ void HttpServer::Stop() {
     if (serverThread_.joinable()) {
         HANDLE hThread = serverThread_.native_handle();
         if (hThread) {
-            // 等待最多 2 秒
-            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            // 等待最多 THREAD_JOIN_TIMEOUT_MS 毫秒
+            DWORD waitRet = WaitForSingleObject(hThread, constants::THREAD_JOIN_TIMEOUT_MS);
             if (waitRet == WAIT_TIMEOUT) {
                 // 超时，强制终止线程
                 TerminateThread(hThread, 0);

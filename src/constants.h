@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: GPL-2.0
+// constants.h - 全局命名常量
+//
+// 目的：消除代码中的魔数，集中管理所有硬编码数值
+// 修改常量时只需改此文件，无需在多个源文件中搜索替换
+#pragma once
+
+// 注意：不要在此文件包含 <windows.h>！
+// <windows.h> 会破坏 Winsock2 的包含顺序（详见 ws2tcpip.h 报错）。
+
+// ═══════════════════════════════════════
+// 自定义消息号（WM_USER 基础偏移）
+// ═══════════════════════════════════════
+// 注意：此处必须使用 #define 宏而非 constexpr/enum，
+// 因为 MSVC 不接受嵌套命名空间内的 constexpr/enum 值作为 switch-case 常量表达式。
+// Windows 平台 WM_* 消息本身就是宏，此处保持一致。
+
+/// 系统托盘事件回调 — WM_USER(0x0400) + 0x200 = 0x0600
+/// 由 TrayIcon 类通过 PostMessage 发送
+/// wParam: 托盘图标 ID; lParam: 鼠标事件（WM_LBUTTONDOWN, WM_RBUTTONUP 等）
+#define WM_TRAY_CALLBACK   0x0600
+
+/// 实时渲染更新请求 — WM_USER(0x0400) + 0x300 = 0x0700
+/// 由 TaskbarWindow 类发送，触发 Render() 调用
+#define WM_RENDER_UPDATE    0x0700
+
+/// 绑定模式进程退出通知 — WM_USER(0x0400) + 0x400 = 0x0800
+/// 由 ProcessMonitor 发送，表示 MoeKoeMusic.exe 已退出
+/// 接收方应自动关闭应用
+#define WM_PROCESS_EXITED   0x0800
+
+namespace moekoe::constants {
+
+// ═══════════════════════════════════════
+// 网络通信端口
+// ═══════════════════════════════════════
+
+/// MoeKoeMusic WebSocket 服务端口（用于接收歌词数据）
+/// 参考：MoeKoeMusic 源代码中的 WebSocket 服务器初始化
+constexpr int WEBSOCKET_LISTEN_PORT = 6520;
+
+/// 本插件 HTTP 服务器端口（用于 Chrome Extension popup.js 通信）
+/// ⚠️ 修改此端口时需同步修改 popup.js 中的端口号
+constexpr int HTTP_SERVER_PORT = 6523;
+
+// ═══════════════════════════════════════
+// 渲染相关常量
+// ═══════════════════════════════════════
+
+/// 帧定时器最小间隔（毫秒）
+/// 限制原因：过快会导致过度渲染浪费 CPU；过慢会掉帧
+/// 计算方式：MAX(MIN_FRAME_INTERVAL_MS, 1000 / 刷新率Hz)
+constexpr int MIN_FRAME_INTERVAL_MS = 15;
+
+/// 目标帧率默认值（刷新率，单位 Hz）
+/// 推荐值：30 FPS（平衡 CPU 占用和渲染流畅度）
+/// 对应 config.h AdvancedConfig::refreshRateHz 的默认值
+constexpr int DEFAULT_REFRESH_RATE_HZ = 30;
+
+// ═══════════════════════════════════════
+// 歌词窗口尺寸（DPI 缩放前的基础值，96 DPI）
+// ═══════════════════════════════════════
+
+/// 歌词区域高度（96 DPI 像素），用于 MulDiv(dpi/96) 缩放
+constexpr int LYRIC_HEIGHT_BASE_DP = 28;
+
+/// 歌词窗口最大宽度（96 DPI 像素），水平任务栏使用
+constexpr int MAX_LYRIC_WIDTH_BASE_DP = 360;
+
+/// 歌词窗口最小可用宽度（像素），防止窗口过窄
+constexpr int MIN_LYRIC_AVAILABLE_WIDTH = 100;
+
+/// 歌词窗口最小总宽度（像素），防止窗口过窄
+constexpr int MIN_WINDOW_WIDTH = 50;
+
+/// 垂直任务栏（左/右）的歌词窗口宽度（96 DPI 像素）
+constexpr int VERTICAL_TASKBAR_LYRIC_WIDTH_BASE_DP = 180;
+
+// ═══════════════════════════════════════
+// UI / 渲染细节
+// ═══════════════════════════════════════
+
+/// 文本左右内边距（像素）
+constexpr float TEXT_PADDING_X = 20.0f;
+
+/// 翻译文本相对主文本的字号减小量
+constexpr float TRANSLATION_FONT_SIZE_DELTA = 3.0f;
+
+/// 悬停控制按钮间距（像素）
+constexpr float BUTTON_SPACING = 2.0f;
+
+/// 悬停按钮背景内边距（像素）
+constexpr float BUTTON_BG_PADDING_X = 4.0f;
+constexpr float BUTTON_BG_PADDING_Y = 2.0f;
+
+/// 悬停按钮背景圆角半径（像素）
+constexpr float BUTTON_BG_BORDER_RADIUS = 3.0f;
+
+// ═══════════════════════════════════════
+// Windows 系统限制
+// ═══════════════════════════════════════
+
+/// Windows Tooltip 最大字符数（包含 null terminator）
+/// 超过此限制会被系统截断，因此提前截断以保证显示完整
+/// 参考：Microsoft 官方文档 WM_SETTEXT
+constexpr int WINDOWS_TOOLTIP_MAX_LEN = 127;
+
+// ═══════════════════════════════════════
+// 自定义消息号（WM_USER 基础偏移）
+// ═══════════════════════════════════════
+// 注意：此处必须使用 #define 宏而非 constexpr/enum，
+// 因为 MSVC 不接受嵌套命名空间内的 constexpr/enum 值作为 switch-case 常量表达式。
+// Windows 平台 WM_* 消息本身就是宏，此处保持一致。
+
+// ═══════════════════════════════════════
+// 进程监控
+// ═══════════════════════════════════════
+
+/// 进程监控轮询间隔（毫秒）
+/// 用于绑定模式检测 MoeKoeMusic.exe 的启动/退出
+constexpr int PROCESS_MONITOR_INTERVAL_MS = 2000;
+
+// ═══════════════════════════════════════
+// WebSocket 重连策略
+// ═══════════════════════════════════════
+
+/// 已连接状态的轮询检查间隔
+constexpr int WS_CONNECTED_POLL_MS = 200;
+
+/// 重连退避等待的粒度（每次 sleep 的毫秒数）
+constexpr int RECONNECT_WAIT_GRANULARITY_MS = 100;
+
+/// 最大重连尝试次数（之后退避时间封顶为 15 秒）
+constexpr int MAX_RECONNECT_ATTEMPTS = 5;
+
+/// 单次连接超时：迭代次数 × 100ms = 总毫秒数
+/// 例如 50 次 × 100ms = 5 秒连接窗口
+constexpr int WS_CONNECT_TIMEOUT_ITERATIONS = 50;
+
+// ═══════════════════════════════════════
+// 线程退出超时
+// ═══════════════════════════════════════
+
+/// 后台线程 join 超时时间（毫秒）
+/// 超时后使用 TerminateThread 强制终止，避免程序退出卡死
+constexpr int THREAD_JOIN_TIMEOUT_MS = 2000;
+
+} // namespace moekoe::constants

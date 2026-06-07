@@ -2,6 +2,7 @@
 // renderer.cpp - Direct2D + DirectWrite 渲染实现
 // 完全透明背景: WIC + UpdateLayeredWindow + 逐字高亮
 #include "renderer.h"
+#include "constants.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -96,7 +97,7 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
-            std::max<FLOAT>(8.0f, static_cast<FLOAT>(settings_.fontSize) - 3.0f),
+            std::max<FLOAT>(8.0f, static_cast<FLOAT>(settings_.fontSize) - constants::TRANSLATION_FONT_SIZE_DELTA),
             L"zh-CN",
             translationFormat_.GetAddressOf());
         if (translationFormat_) {
@@ -198,7 +199,7 @@ void TaskbarRenderer::DrawCentered(const std::wstring& text, ID2D1Brush* brush, 
     if (!renderTarget_ || !textFormat_ || !brush || text.empty()) return;
     
     // 水平偏移量（像素）
-    const float paddingX = 20.0f;
+    const float paddingX = constants::TEXT_PADDING_X;
     
     D2D1_RECT_F layout = D2D1::RectF(
         paddingX, yOffset,
@@ -219,7 +220,7 @@ void TaskbarRenderer::DrawHighlightedTextPerCharacter(const std::wstring& text,
     if (length == 0) return;
 
     // 水平偏移量（像素）
-    const float paddingX = 20.0f;
+    const float paddingX = constants::TEXT_PADDING_X;
 
     // 布局区域
     D2D1_RECT_F layoutRect = D2D1::RectF(
@@ -266,7 +267,7 @@ void TaskbarRenderer::DrawTranslatedText(const std::wstring& text) {
     if (!translationFormat_ || !translationBrush_ || text.empty()) return;
     
     // 水平偏移量（像素）
-    const float paddingX = 20.0f;
+    const float paddingX = constants::TEXT_PADDING_X;
     
     D2D1_RECT_F layout = D2D1::RectF(
         paddingX, static_cast<FLOAT>(height_) * 0.55f,
@@ -283,22 +284,22 @@ void TaskbarRenderer::DrawHoverControls(bool isPlaying) {
     const FLOAT w = static_cast<FLOAT>(width_);
     const FLOAT h = static_cast<FLOAT>(height_);
     const FLOAT btnSize = h * 0.7f;
-    const FLOAT spacing = 2.0f;
+    const FLOAT spacing = constants::BUTTON_SPACING;
     const FLOAT totalBtnWidth = btnSize * 3.0f + spacing * 2.0f;
     const FLOAT startX = (w - totalBtnWidth) / 2.0f;
     const FLOAT btnY = (h - btnSize) / 2.0f;
 
     // 半透明背景
     D2D1_RECT_F bgRect = D2D1::RectF(
-        startX - 4.0f, btnY - 2.0f,
-        startX + totalBtnWidth + 4.0f, btnY + btnSize + 2.0f);
+        startX - constants::BUTTON_BG_PADDING_X, btnY - constants::BUTTON_BG_PADDING_Y,
+        startX + totalBtnWidth + constants::BUTTON_BG_PADDING_X, btnY + btnSize + constants::BUTTON_BG_PADDING_Y);
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bgBrush;
     renderTarget_->CreateSolidColorBrush(
         D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.15f),
         bgBrush.GetAddressOf());
     if (bgBrush) {
         renderTarget_->FillRoundedRectangle(
-            D2D1::RoundedRect(bgRect, 3.0f, 3.0f), bgBrush.Get());
+            D2D1::RoundedRect(bgRect, constants::BUTTON_BG_BORDER_RADIUS, constants::BUTTON_BG_BORDER_RADIUS), bgBrush.Get());
     }
 
     // 按钮符号颜色

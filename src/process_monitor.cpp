@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // process_monitor.cpp - 进程监控模块实现
 #include "process_monitor.h"
+#include "constants.h"
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -90,8 +91,8 @@ void ProcessMonitor::Stop() {
     if (monitorThread_.joinable()) {
         HANDLE hThread = monitorThread_.native_handle();
         if (hThread) {
-            // 等待最多 2 秒
-            DWORD waitRet = WaitForSingleObject(hThread, 2000);
+            // 等待最多 THREAD_JOIN_TIMEOUT_MS 毫秒
+            DWORD waitRet = WaitForSingleObject(hThread, constants::THREAD_JOIN_TIMEOUT_MS);
             if (waitRet == WAIT_TIMEOUT) {
                 // 超时，强制终止线程
                 TerminateThread(hThread, 0);
