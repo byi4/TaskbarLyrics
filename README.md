@@ -1,6 +1,6 @@
 # MoeKoeMusic Taskbar Lyrics
 
-> 嵌入到 Windows 任务栏内部的卡拉 OK 歌词显示插件（v0.3.0）
+>  Windows 任务栏的歌词显示插件（v0.3.0）
 
 ## 项目简介
 
@@ -11,6 +11,7 @@
 ## 主要特性
 
 ### 核心功能
+
 - **零侵入**：独立 EXE，与 MoeKoeMusic 完全解耦
 - **卡拉 OK 效果**：基于 Direct2D + DirectWrite 渲染，逐字高亮渐变
 - **悬停控制按钮**：鼠标悬停歌词时显示 ⏮ ⏸/▶ ⏭
@@ -20,6 +21,7 @@
 - **翻译歌词**：可选显示翻译行
 
 ### 配置系统
+
 - **持久化存储**：`%APPDATA%\MoeKoeTaskbarLyrics\config.json`
 - **WebView2 设置界面**（优先）：现代化 UI，暗色模式自动切换，实时预览
 - **Win32 设置界面**（回退）：WebView2 不可用时自动降级
@@ -32,12 +34,14 @@
   - WebSocket 端口 / 刷新率
 
 ### 插件集成
+
 - Chrome Extension Manifest V3 格式
 - popup.js 通过 `file://` 协议启动 EXE（不依赖宿主 IPC）
 - HTTP 接口（端口 6521）：ping 检测存活 / shutdown 优雅退出
 - 托盘菜单：设置 / 重连 / 解除绑定 / 退出
 
 ### 运行模式
+
 - **绑定模式**：EXE 放在 MoeKoeMusic 目录下，随主进程启停
 - **独立模式**：常驻系统托盘，手动管理生命周期
 
@@ -92,12 +96,12 @@ resources/
 
 ## 环境要求
 
-| 工具 | 版本 |
-|------|------|
-| Windows SDK | 10.0.26100+ |
-| Visual Studio | 2022 (v143) |
-| CMake | 3.20+ |
-| vcpkg | latest |
+| 工具               | 版本          |
+| ---------------- | ----------- |
+| Windows SDK      | 10.0.26100+ |
+| Visual Studio    | 2022 (v143) |
+| CMake            | 3.20+       |
+| vcpkg            | latest      |
 | WebView2 Runtime | 已安装（设置界面需要） |
 
 ## 构建
@@ -122,10 +126,13 @@ cmake --build build --config x64-Debug
 ## 使用方式
 
 ### 方式一：独立运行
+
 双击 `MoeKoeTaskbarLyrics.exe`，右键托盘图标操作。
 
 ### 方式二：作为 MoeKoeMusic 插件
+
 将 `moeKoe-taskbar-lyrics` 目录复制到：
+
 - 开发版：`MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics/`
 - 安装版：`%APPDATA%/moekoemusic/extensions/moeKoe-taskbar-lyrics/`
 
@@ -134,6 +141,7 @@ cmake --build build --config x64-Debug
 ## 当前状态 (v0.3.0)
 
 ### 已完成
+
 - [x] Direct2D 透明窗口渲染 + 逐字高亮
 - [x] 悬停控制按钮（上一首/暂停/下一首）
 - [x] 多方向任务栏适配
@@ -147,6 +155,7 @@ cmake --build build --config x64-Debug
 - [x] Z-order 保持（防止被任务栏覆盖）
 
 ### 待改进
+
 - [ ] WebView2 设置界面的实际测试和调试
 - [ ] 插件 popup 的 EXE 启动方式验证（file:// 协议是否有效）
 - [ ] 多显示器支持
