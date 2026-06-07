@@ -4,9 +4,9 @@
 #include "config.h"
 #include "config_dialog.h"
 #include "http_server.h"
+#include "settings_window.h"
 #include "lyrics_data.h"
 #include "lyrics_parser.h"
-#include "native_messaging.h"
 #include "process_monitor.h"
 #include "renderer.h"
 #include "taskbar_window.h"
@@ -18,56 +18,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
-
-namespace {
-
-// 检测是否运行在 Native Messaging 模式
-// Chrome 启动 Native Host 时会连接 stdin 为管道
-bool IsNativeMessagingMode() {
-    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    if (hStdin == INVALID_HANDLE_VALUE || hStdin == NULL) {
-        return false;
-    }
-    // 管道类型 = FILE_TYPE_PIPE
-    DWORD type = GetFileType(hStdin);
-    return (type == FILE_TYPE_PIPE);
-}
-
-// Native Messaging 模式下的命令处理
-moekoe::NativeResponse HandleNativeCommand(const moekoe::NativeMessage& msg) {
-    moekoe::NativeResponse resp;
-    
-    if (msg.command == "ping") {
-        resp.success = true;
-        resp.message = "ok";
-        resp.data["version"] = "1.0.0";
-        resp.data["running"] = true;
-    }
-    else if (msg.command == "status") {
-        resp.success = true;
-        resp.message = "status";
-        // TODO: 返回当前歌词状态
-        resp.data["connected"] = true;
-    }
-    else if (msg.command == "start") {
-        // 启动歌词显示（如果尚未运行）
-        resp.success = true;
-        resp.message = "started";
-    }
-    else if (msg.command == "stop" || msg.command == "shutdown") {
-        resp.success = true;
-        resp.message = "shutting down";
-        // 返回后 Run() 会退出
-    }
-    else {
-        resp.success = false;
-        resp.message = "unknown command: " + msg.command;
-    }
-    
-    return resp;
-}
-
-} // namespace
 
 namespace {
 
@@ -113,6 +63,7 @@ struct AppContext {
     moekoe::LyricsParser*    parser{nullptr};
     moekoe::ProcessMonitor*  processMonitor{nullptr};
     moekoe::HttpServer*      httpServer{nullptr};
+    moekoe::SettingsWindow*   settingsWindow{nullptr};
     HINSTANCE                hInstance{nullptr};
     HWND                     hwnd{nullptr}; // 隐式消息窗口
     bool                     running{true};
@@ -181,14 +132,46 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         break;
     }
     case ID_MENU_SETTINGS: {
-        // 打开 GUI 配置界面
-        if (ConfigDialog::Show(app.hInstance, app.hwnd, *app.config,
-                               app.boundMode,
-                               [&app]() {
-                                   app.running = false;
-                                   ::PostQuitMessage(0);
-                               })) {
+        // 优先尝试 WebView2 设置界面
+        bool useWebView2 = true;
+        if (!app.settingsWindow) {
+            app.settingsWindow = new moekoe::SettingsWindow();
+            app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
+                ApplyRendererSettings(app);
+                if (app.taskbarWindow) {
+                    app.taskbarWindow->SetDragOffset(
+                        cfg.Position().offsetX, cfg.Position().offsetY);
+                    app.taskbarWindow->Reposition();
+                }
+                app.config->Save();
+                DebugLog("[SETTINGS] Config applied and saved\n");
+            });
+        }
+
+        if (useWebView2) {
+            if (app.settingsWindow->Show(app.hInstance, app.hwnd, *app.config)) {
+                // WebView2 窗口创建成功（异步初始化中）
+                break;
+            } else {
+                // WebView2 完全失败，回退到 Win32 对话框
+                delete app.settingsWindow;
+                app.settingsWindow = nullptr;
+            }
+        }
+
+        // 回退: 使用旧的 Win32 配置对话框
+        if (moekoe::ConfigDialog::Show(app.hInstance, app.hwnd, *app.config,
+                                       app.boundMode,
+                                       [&app]() {
+                                           app.running = false;
+                                           ::PostQuitMessage(0);
+                                       })) {
             ApplyRendererSettings(app);
+            if (app.taskbarWindow) {
+                app.taskbarWindow->SetDragOffset(
+                    app.config->Position().offsetX, app.config->Position().offsetY);
+                app.taskbarWindow->Reposition();
+            }
         }
         break;
     }
@@ -244,6 +227,7 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 auto state = app->parser->GetCurrentRenderState();
                 if (app->taskbarWindow) {
                     state.isHovering = app->taskbarWindow->IsHovering();
+                    state.isDragging = app->taskbarWindow->IsDragging();
                 }
                 app->renderer->Render(state);
                 if (app->tray && state.hasLyrics) {
@@ -266,6 +250,7 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (app->parser && app->renderer && app->taskbarWindow) {
                 auto state = app->parser->GetCurrentRenderState();
                 state.isHovering = app->taskbarWindow->IsHovering();
+                state.isDragging = app->taskbarWindow->IsDragging();
                 app->renderer->Render(state);
             }
         } catch (...) {}
@@ -307,17 +292,6 @@ static LONG WINAPI GlobalExceptionHandler(EXCEPTION_POINTERS* ep) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nShow*/) {
-    // ── Native Messaging 模式检测 ──────────────────────────────
-    // Chrome 启动 Native Host 时会以管道连接 stdin/stdout
-    if (IsNativeMessagingMode()) {
-        // 进入 Native Messaging 模式（无 GUI，只处理 stdin/stdout）
-        moekoe::NativeMessagingHost host;
-        host.SetCommandHandler(HandleNativeCommand);
-        host.Run();  // 阻塞直到收到 shutdown 或 stdin 关闭
-        return 0;
-    }
-
-    // ── 正常 GUI 模式 ──────────────────────────────────────────
     // 初始化日志路径（EXE 所在目录）
     InitLogPath();
 
@@ -422,6 +396,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     }
     app.taskbarWindow = &taskbarWindow;
 
+    // 应用配置中的位置偏移
+    taskbarWindow.SetDragOffset(config.Position().offsetX, config.Position().offsetY);
+
+    // 拖动结束时保存位置偏移到配置
+    taskbarWindow.OnHoverChanged([&]() {
+        if (app.taskbarWindow) {
+            config.MutablePosition().offsetX = app.taskbarWindow->GetDragOffsetX();
+            config.MutablePosition().offsetY = app.taskbarWindow->GetDragOffsetY();
+            config.Save();
+        }
+    });
+
     // 初始隐藏窗口，收到歌词数据后再显示
     ::ShowWindow(taskbarWindow.GetHandle(), SW_HIDE);
 
@@ -504,24 +490,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
             ::PostQuitMessage(0);
         }
     });
-    const int httpPort = 6521; // popup.js 固定使用此端口
+    const int httpPort = 6523; // popup.js 固定使用此端口
     if (httpServer.Start(httpPort)) {
         DebugLog("[STARTUP] HTTP server started on port %d\n", httpPort);
     } else {
         DebugLog("[STARTUP] HTTP server failed to start (non-fatal)\n");
     }
 
-    // 11) 进程监控：始终监控 MoeKoeMusic.exe 进程
-    //     - 绑定模式(插件部署)：EXE 在 extensions/ 子目录，MoeKoeMusic 退出时自动退出
-    //     - 独立模式(单独运行)：检测不到 MoeKoeMusic 进程，不会触发退出，行为不变
+    // 11) 绑定模式：启动进程监控
     moekoe::ProcessMonitor processMonitor;
     app.processMonitor = &processMonitor;
-    processMonitor.Start(L"MoeKoeMusic.exe",
-        /*onStarted*/ []() {},
-        /*onExited*/ [hMsgWnd]() {
-            ::PostMessageW(hMsgWnd, WM_USER + 0x400, 0, 0);
-        });
-    DebugLog("[STARTUP] Process monitor started (bound=%s)\n", boundMode ? "YES" : "NO");
+    if (boundMode) {
+        processMonitor.Start(L"MoeKoeMusic.exe",
+            /*onStarted*/ []() {},
+            /*onExited*/ [hMsgWnd]() {
+                ::PostMessageW(hMsgWnd, WM_USER + 0x400, 0, 0);
+            });
+        DebugLog("[STARTUP] Process monitor started (bound mode)\n");
+    }
 
     // 启动帧定时器
     const int intervalMs = std::max(15, 1000 / std::max(1, config.Advanced().refreshRateHz));

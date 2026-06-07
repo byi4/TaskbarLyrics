@@ -67,6 +67,12 @@ public:
 
     // 鼠标悬停状态
     bool IsHovering() const { return isHovering_; }
+    bool IsDragging() const { return isDragging_; }
+
+    // 拖动偏移（用户手动拖动调整的位置）
+    int GetDragOffsetX() const { return dragOffsetX_; }
+    int GetDragOffsetY() const { return dragOffsetY_; }
+    void SetDragOffset(int x, int y) { dragOffsetX_ = x; dragOffsetY_ = y; }
 
     // 按钮点击回调
     using ButtonCallback = std::function<void(HoverButton)>;
@@ -100,6 +106,11 @@ private:
     bool          created_{false};
     bool          isHovering_{false};
     bool          trackingMouse_{false};
+    bool          isDragging_{false};
+    POINT         dragStartPos_{0, 0};     // 拖动开始时鼠标屏幕坐标
+    POINT         dragStartWinPos_{0, 0};  // 拖动开始时窗口屏幕坐标
+    int           dragOffsetX_{0};         // 用户拖动产生的累积偏移
+    int           dragOffsetY_{0};
 
     ButtonCallback onButtonClicked_;
     HoverChangedCallback onHoverChanged_;

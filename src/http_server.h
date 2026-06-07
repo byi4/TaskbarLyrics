@@ -28,7 +28,7 @@ public:
     HttpServer& operator=(const HttpServer&) = delete;
 
     // 启动服务器（异步，返回是否成功启动）
-    bool Start(int port = 6521);
+    bool Start(int port = 6523);
 
     // 停止服务器
     void Stop();
@@ -45,6 +45,7 @@ private:
     std::thread serverThread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stopRequested_{false};
+    int port_{0};
     CommandCallback onCommand_;
 };
 

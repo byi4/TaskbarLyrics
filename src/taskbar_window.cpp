@@ -214,47 +214,36 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
 
     switch (info_.position) {
     case TaskbarPosition::BOTTOM: {
-        // 底部任务栏: 歌词浮动在任务栏上方
-        int rightEdge = tbRect.left;
-        if (foundRebar) rightEdge = std::max(rightEdge, (int)rebarRect.right);
-        if (foundTaskList) rightEdge = std::max(rightEdge, (int)taskListRect.right);
+        // 底部任务栏: 歌词定位在右侧（紧靠托盘左侧），不覆盖最小化窗口区域
+        int rightEdge = tbRect.right;
+        if (foundTray) rightEdge = trayRect.left;
 
-        int leftEdge = tbRect.right;
-        if (foundTray) leftEdge = std::min(leftEdge, (int)trayRect.left);
-
-        int gapWidth = leftEdge - rightEdge;
-        if (gapWidth > 50) {
-            x = rightEdge;
-            w = gapWidth;
-        } else if (foundTaskList && (taskListRect.right - taskListRect.left) > 100) {
-            x = taskListRect.left;
-            w = taskListRect.right - taskListRect.left;
-        } else {
-            x = foundRebar ? rebarRect.right : tbRect.left;
-            w = foundTray ? (trayRect.left - x) : (tbRect.right - x);
+        // 歌词窗口最大宽度
+        const int maxLyricWidth = ::MulDiv(360, info_.dpi, 96);
+        int availableWidth = rightEdge - tbRect.left;
+        if (foundTaskList) {
+            availableWidth = rightEdge - taskListRect.right;
         }
-        // 浮动在任务栏顶部
-        y = tbRect.top;
+
+        w = std::min(maxLyricWidth, std::max(availableWidth, 100));
+        x = rightEdge - w + dragOffsetX_;
+        y = tbRect.top + dragOffsetY_;
         h = tbHeight;
         break;
     }
     case TaskbarPosition::TOP: {
-        int rightEdge = tbRect.left;
-        if (foundRebar) rightEdge = std::max(rightEdge, (int)rebarRect.right);
-        if (foundTaskList) rightEdge = std::max(rightEdge, (int)taskListRect.right);
+        int rightEdge = tbRect.right;
+        if (foundTray) rightEdge = trayRect.left;
 
-        int leftEdge = tbRect.right;
-        if (foundTray) leftEdge = std::min(leftEdge, (int)trayRect.left);
-
-        int gapWidth = leftEdge - rightEdge;
-        if (gapWidth > 50) {
-            x = rightEdge;
-            w = gapWidth;
-        } else {
-            x = foundRebar ? rebarRect.right : tbRect.left;
-            w = foundTray ? (trayRect.left - x) : (tbRect.right - x);
+        const int maxLyricWidth = ::MulDiv(360, info_.dpi, 96);
+        int availableWidth = rightEdge - tbRect.left;
+        if (foundTaskList) {
+            availableWidth = rightEdge - taskListRect.right;
         }
-        y = tbRect.top;
+
+        w = std::min(maxLyricWidth, std::max(availableWidth, 100));
+        x = rightEdge - w + dragOffsetX_;
+        y = tbRect.top + dragOffsetY_;
         h = tbHeight;
         break;
     }
@@ -318,13 +307,12 @@ HoverButton TaskbarWindow::HitTestButton(int x, int y) const {
     const int w = rc.right - rc.left;
     const int h = rc.bottom - rc.top;
 
-    // 按钮区域: 在窗口右侧，三个按钮水平排列
-    // 每个按钮宽度约为高度的 1.2 倍，间距 2px
+    // 按钮区域: 居中排列，三个按钮水平排列
     const int btnSize = static_cast<int>(h * 0.7);
     const int btnY = (h - btnSize) / 2;
     const int spacing = 2;
     const int totalBtnWidth = btnSize * 3 + spacing * 2;
-    const int startX = w - totalBtnWidth - 8; // 右侧留 8px 边距
+    const int startX = (w - totalBtnWidth) / 2;
 
     // 检查 y 是否在按钮区域内
     if (y < btnY || y > btnY + btnSize) return HoverButton::None;
@@ -363,6 +351,62 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             self->isHovering_ = true;
             changed = true;
         }
+
+        // 拖动中：根据任务栏方位约束移动方向
+        if (self->isDragging_) {
+            POINT cur{};
+            ::GetCursorPos(&cur);
+            int dx = cur.x - self->dragStartPos_.x;
+            int dy = cur.y - self->dragStartPos_.y;
+            RECT wr{};
+            ::GetWindowRect(hwnd, &wr);
+
+            int newWx = wr.left;
+            int newWy = wr.top;
+
+            // 根据任务栏方位决定允许的拖动方向
+            switch (self->info_.position) {
+            case TaskbarPosition::BOTTOM:
+            case TaskbarPosition::TOP:
+                // 水平任务栏：只允许水平拖动（X轴），Y锁定在任务栏内
+                newWx = self->dragStartWinPos_.x + dx;
+                break;
+            case TaskbarPosition::LEFT:
+            case TaskbarPosition::RIGHT:
+                // 垂直任务栏：只允许垂直拖动（Y轴），X锁定在任务栏内
+                newWy = self->dragStartWinPos_.y + dy;
+                break;
+            }
+
+            // 约束在任务栏矩形范围内
+            RECT tbRect{};
+            if (self->hTaskbar_) ::GetWindowRect(self->hTaskbar_, &tbRect);
+            const int winW = wr.right - wr.left;
+            const int winH = wr.bottom - wr.top;
+
+            // X 边界
+            if (newWx < tbRect.left) newWx = tbRect.left;
+            if (newWx + winW > tbRect.right) newWx = tbRect.right - winW;
+
+            // Y 边界
+            if (newWy < tbRect.top) newWy = tbRect.top;
+            if (newWy + winH > tbRect.bottom) newWy = tbRect.bottom - winH;
+
+            // 计算相对于"自动定位位置"的偏移量
+            // 自动位置 = 拖动开始时的窗口位置 - 当时的偏移量
+            // 新偏移量 = 当前实际位置 - 自动位置
+            int autoX = self->dragStartWinPos_.x - self->dragOffsetX_;
+            int autoY = self->dragStartWinPos_.y - self->dragOffsetY_;
+            self->dragOffsetX_ = newWx - autoX;
+            self->dragOffsetY_ = newWy - autoY;
+
+            self->dragStartPos_ = cur;
+            self->dragStartWinPos_.x = newWx;
+            self->dragStartWinPos_.y = newWy;
+
+            ::SetWindowPos(hwnd, nullptr, newWx, newWy, 0, 0,
+                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         if (!self->trackingMouse_) {
             TRACKMOUSEEVENT tme{};
             tme.cbSize = sizeof(tme);
@@ -391,6 +435,36 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         HoverButton btn = self->HitTestButton(x, y);
         if (btn != HoverButton::None && self->onButtonClicked_) {
             self->onButtonClicked_(btn);
+        } else {
+            // 非按钮区域：开始拖动
+            self->isDragging_ = true;
+            ::GetCursorPos(&self->dragStartPos_);
+            RECT wr{};
+            ::GetWindowRect(hwnd, &wr);
+            self->dragStartWinPos_.x = wr.left;
+            self->dragStartWinPos_.y = wr.top;
+            ::SetCapture(hwnd);
+            // 通知重绘以显示拖动边框
+            if (self->onHoverChanged_) self->onHoverChanged_();
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP: {
+        if (self->isDragging_) {
+            self->isDragging_ = false;
+            ::ReleaseCapture();
+            // 通知重绘以移除拖动边框
+            if (self->onHoverChanged_) {
+                self->onHoverChanged_();
+            }
+        }
+        return 0;
+    }
+    case WM_ACTIVATE: {
+        // 保持 TOPMOST：防止被其他窗口（包括任务栏）覆盖
+        if (LOWORD(wParam) != WA_INACTIVE) {
+            ::SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
         return 0;
     }

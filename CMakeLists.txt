@@ -86,10 +86,10 @@ set_target_properties(ixwebsocket::ixwebsocket PROPERTIES
         "${MBEDTLS_LIBRARY};${MBEDX509_LIBRARY};${MBEDCRYPTO_LIBRARY};ZLIB::ZLIB;wsock32;ws2_32;shlwapi;Crypt32"
 )
 
-# 4. nlohmann_json（header-only，用 find_path 直接找头文件）
+# 5. nlohmann_json（header-only，用 find_path 直接找头文件）
 find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
     PATHS "${VCPKG_INSTALLED_DIR}/include" NO_DEFAULT_PATH)
-if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+if(!NLOHMANN_JSON_INCLUDE_DIR)
     message(FATAL_ERROR "nlohmann_json not found in vcpkg installed directory")
 endif()
 add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
@@ -97,11 +97,32 @@ set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}")
 message(STATUS "Found nlohmann_json: ${NLOHMANN_JSON_INCLUDE_DIR}")
 
+# 6. WebView2 SDK（NuGet 包或系统安装）
+find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
+    PATHS
+        "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/include"
+        "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
+        "C:/Program Files (x86)/Microsoft/Edge WebView2"
+    NO_DEFAULT_PATH)
+if(WEBVIEW2_INCLUDE_DIR)
+    message(STATUS "Found WebView2: ${WEBVIEW2_INCLUDE_DIR}")
+else()
+    message(WARNING "WebView2 SDK headers not found - SettingsWindow will not compile")
+endif()
+
+# 7. WebView2 Loader 库（运行时动态链接）
+find_library(WEBVIEW2_LOADER_LIB WebView2Loader
+    PATHS
+        "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/x64"
+        "C:/Program Files (x86)/Microsoft/Edge WebView2"
+    NO_DEFAULT_PATH)
+
 # 源文件
 set(SOURCES
     src/main.cpp
     src/websocket_client.cpp
     src/http_server.cpp
+    src/settings_window.cpp
     src/lyrics_parser.cpp
     src/taskbar_window.cpp
     src/renderer.cpp
@@ -109,7 +130,6 @@ set(SOURCES
     src/tray_icon.cpp
     src/process_monitor.cpp
     src/config_dialog.cpp
-    src/native_messaging.cpp
 )
 
 # 头文件目录
@@ -117,6 +137,7 @@ set(HEADERS
     src/lyrics_data.h
     src/websocket_client.h
     src/http_server.h
+    src/settings_window.h
     src/lyrics_parser.h
     src/taskbar_window.h
     src/renderer.h
@@ -124,13 +145,16 @@ set(HEADERS
     src/tray_icon.h
     src/process_monitor.h
     src/config_dialog.h
-    src/native_messaging.h
 )
 
 # 可执行目标
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
-target_include_directories(${PROJECT_NAME} PRIVATE src)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    src
+    ${NLOHMANN_JSON_INCLUDE_DIR}
+    ${WEBVIEW2_INCLUDE_DIR}
+)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ixwebsocket::ixwebsocket
@@ -150,6 +174,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     shlwapi
     userenv
     bcrypt
+    ${WEBVIEW2_LOADER_LIB}
 )
 
 # 资源
@@ -171,11 +196,21 @@ if(MSVC)
             COMMENT "Copying resources to output directory")
     endif()
 
-    # 复制 EXE 到 extension/ 目录（以及 MoeKoeMusic 插件目录）
-    set(EXTENSION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extension")
+    # 复制 EXE 到 MoeKoeMusic 插件目录
+    set(PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:${PROJECT_NAME}>
-            "${EXTENSION_DIR}/MoeKoeTaskbarLyrics.exe"
-        COMMENT "Copying EXE to project extension/ directory")
+            "${PLUGIN_DIR}/MoeKoeTaskbarLyrics.exe"
+        COMMENT "Copying EXE to MoeKoeMusic plugin directory")
+
+    # 复制 WebView2Loader.dll 到输出目录（WebView2 运行时依赖）
+    if(WEBVIEW2_LOADER_LIB)
+        get_filename_component(WEBVIEW2_DLL_DIR "${WEBVIEW2_LOADER_LIB}" DIRECTORY)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${WEBVIEW2_DLL_DIR}/WebView2Loader.dll"
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll
+            COMMENT "Copying WebView2Loader.dll to output directory")
+    endif()
 endif()

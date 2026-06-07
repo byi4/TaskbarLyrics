@@ -28,6 +28,12 @@ struct AdvancedConfig {
     bool debugLog{false};
 };
 
+// 歌词窗口位置偏移（用户可拖动调整）
+struct PositionConfig {
+    int offsetX{0};   // 水平偏移像素
+    int offsetY{0};   // 垂直偏移像素
+};
+
 class Config {
 public:
     Config();
@@ -48,8 +54,10 @@ public:
     // ---- 配置子结构 ----
     const AppearanceConfig& Appearance() const { return appearance_; }
     const AdvancedConfig&   Advanced()   const { return advanced_; }
+    const PositionConfig&   Position()   const { return position_; }
     AppearanceConfig&       MutableAppearance() { return appearance_; }
     AdvancedConfig&         MutableAdvanced()   { return advanced_; }
+    PositionConfig&         MutablePosition()   { return position_; }
 
     // ---- 路径 ----
     static std::string GetConfigPath();
@@ -62,6 +70,7 @@ private:
     bool             autoStart_{true};
     AppearanceConfig appearance_;
     AdvancedConfig   advanced_;
+    PositionConfig   position_;
 };
 
 } // namespace moekoe

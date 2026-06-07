@@ -64,6 +64,12 @@ bool Config::Load() {
             advanced_.refreshRateHz   = a.value("refresh_rate_hz",  advanced_.refreshRateHz);
             advanced_.debugLog        = a.value("debug_log",        advanced_.debugLog);
         }
+
+        if (j.contains("position")) {
+            const auto& p = j["position"];
+            position_.offsetX = p.value("offset_x", position_.offsetX);
+            position_.offsetY = p.value("offset_y", position_.offsetY);
+        }
     } catch (const std::exception&) {
         // 解析失败 -> 恢复默认值
         return Save();
@@ -94,6 +100,11 @@ bool Config::Save() const {
         {"websocket_port",   advanced_.websocketPort},
         {"refresh_rate_hz",  advanced_.refreshRateHz},
         {"debug_log",        advanced_.debugLog},
+    };
+
+    j["position"] = {
+        {"offset_x", position_.offsetX},
+        {"offset_y", position_.offsetY},
     };
 
     out << j.dump(2);

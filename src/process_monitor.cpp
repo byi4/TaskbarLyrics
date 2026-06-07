@@ -21,23 +21,9 @@ bool ProcessMonitor::IsBoundMode() {
     ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
     std::filesystem::path selfPath(exePath);
-    auto selfDir = selfPath.parent_path();
+    std::filesystem::path targetPath = selfPath.parent_path() / L"MoeKoeMusic.exe";
 
-    // 1) 同目录（原始逻辑：与 MoeKoeMusic.exe 并列）
-    if (std::filesystem::exists(selfDir / L"MoeKoeMusic.exe"))
-        return true;
-
-    // 2) 父目录（覆盖 extensions/moeKoe-taskbar-lyrics/ 部署场景）
-    auto parentDir = selfDir.parent_path();
-    if (std::filesystem::exists(parentDir / L"MoeKoeMusic.exe"))
-        return true;
-
-    // 3) 父目录的父目录（覆盖更深层嵌套或开发目录结构）
-    auto grandparentDir = parentDir.parent_path();
-    if (std::filesystem::exists(grandparentDir / L"MoeKoeMusic.exe"))
-        return true;
-
-    return false;
+    return std::filesystem::exists(targetPath);
 }
 
 bool ProcessMonitor::CheckProcessRunning() {

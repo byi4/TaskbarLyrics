@@ -87,7 +87,7 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
             L"zh-CN",
             textFormat_.GetAddressOf());
         if (textFormat_) {
-            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
@@ -221,61 +221,45 @@ void TaskbarRenderer::DrawHighlightedTextPerCharacter(const std::wstring& text,
     // 水平偏移量（像素）
     const float paddingX = 20.0f;
 
-    // 先画全部普通颜色
+    // 布局区域
     D2D1_RECT_F layoutRect = D2D1::RectF(
         paddingX, 0.0f, static_cast<FLOAT>(width_) - paddingX, static_cast<FLOAT>(height_));
+
+    // 先画全部普通颜色
     renderTarget_->DrawTextW(
         text.c_str(), length, textFormat_.Get(), layoutRect, normalBrush_.Get());
 
-    if (enableKaraoke && progress > 0.0) {
-        // 计算应该高亮的字数
-        const size_t charsToHighlight = static_cast<size_t>(
-            std::min(progress * length + 0.5, static_cast<double>(length)));
+    if (!enableKaraoke || progress <= 0.0) return;
 
-        if (charsToHighlight > 0) {
-            // 使用 IDWriteTextLayout 来逐个处理字符
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> fullLayout;
-            if (SUCCEEDED(dwriteFactory_->CreateTextLayout(
-                text.c_str(), length, textFormat_.Get(),
-                static_cast<FLOAT>(width_) - paddingX * 2.0f, static_cast<FLOAT>(height_),
-                fullLayout.GetAddressOf()))) {
-
-                DWRITE_TEXT_METRICS metrics{};
-                fullLayout->GetMetrics(&metrics);
-
-                // 文本左侧位置
-                const FLOAT textLeft = paddingX;
-
-                // 为了逐字高亮，我们需要知道每个字符的位置
-                // 这里我们用简单的方法：先计算出截止字符的位置
-                std::wstring highlightText = text.substr(0, charsToHighlight);
-
-                Microsoft::WRL::ComPtr<IDWriteTextLayout> highlightLayout;
-                if (SUCCEEDED(dwriteFactory_->CreateTextLayout(
-                    highlightText.c_str(), static_cast<UINT32>(highlightText.size()),
-                    textFormat_.Get(),
-                    static_cast<FLOAT>(width_) - paddingX * 2.0f, static_cast<FLOAT>(height_),
-                    highlightLayout.GetAddressOf()))) {
-
-                    DWRITE_TEXT_METRICS hlMetrics{};
-                    highlightLayout->GetMetrics(&hlMetrics);
-
-                    const FLOAT highlightWidth = hlMetrics.width;
-
-                    // 用裁剪区域画出高亮的部分
-                    D2D1_RECT_F clipRect = D2D1::RectF(
-                        textLeft,
-                        0.0f,
-                        textLeft + highlightWidth,
-                        static_cast<FLOAT>(height_));
-                    renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-                    renderTarget_->DrawTextW(
-                        text.c_str(), length, textFormat_.Get(), layoutRect, highlightBrush_.Get());
-                    renderTarget_->PopAxisAlignedClip();
-                }
-            }
-        }
+    // 使用 IDWriteTextLayout 获取精确的文本位置信息
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> fullLayout;
+    if (FAILED(dwriteFactory_->CreateTextLayout(
+        text.c_str(), length, textFormat_.Get(),
+        layoutRect.right - layoutRect.left, static_cast<FLOAT>(height_),
+        fullLayout.GetAddressOf()))) {
+        return;
     }
+
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(fullLayout->GetMetrics(&metrics))) return;
+
+    // 文本实际绘制区域的左边缘（考虑居中对齐）
+    const float textLeft = paddingX + (layoutRect.right - layoutRect.left - metrics.width) / 2.0f;
+    // 高亮部分的像素宽度
+    const float highlightWidth = std::min(metrics.width * static_cast<float>(progress), metrics.width);
+
+    if (highlightWidth <= 0.0f) return;
+
+    // 用裁剪区域画出高亮的部分
+    D2D1_RECT_F clipRect = D2D1::RectF(
+        textLeft,
+        0.0f,
+        textLeft + highlightWidth,
+        static_cast<FLOAT>(height_));
+    renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    renderTarget_->DrawTextW(
+        text.c_str(), length, textFormat_.Get(), layoutRect, highlightBrush_.Get());
+    renderTarget_->PopAxisAlignedClip();
 }
 
 void TaskbarRenderer::DrawTranslatedText(const std::wstring& text) {
@@ -301,7 +285,7 @@ void TaskbarRenderer::DrawHoverControls(bool isPlaying) {
     const FLOAT btnSize = h * 0.7f;
     const FLOAT spacing = 2.0f;
     const FLOAT totalBtnWidth = btnSize * 3.0f + spacing * 2.0f;
-    const FLOAT startX = w - totalBtnWidth - 8.0f;
+    const FLOAT startX = (w - totalBtnWidth) / 2.0f;
     const FLOAT btnY = (h - btnSize) / 2.0f;
 
     // 半透明背景
@@ -428,6 +412,7 @@ void TaskbarRenderer::Render(const RenderState& state) {
                          state.currentTranslated != lastState_.currentTranslated ||
                          state.isPlaying != lastState_.isPlaying ||
                          state.isHovering != lastState_.isHovering ||
+                         state.isDragging != lastState_.isDragging ||
                          std::abs(state.progress - lastState_.progress) > 0.001);
     if (!stateChanged) {
         return;
@@ -446,7 +431,10 @@ void TaskbarRenderer::Render(const RenderState& state) {
 
     // 悬停时填充极低 alpha 背景，使整个窗口区域可接收鼠标消息
     // alpha ≈ 1/255 肉眼不可见，但 Windows 不会将鼠标消息穿透
-    if (state.isHovering) {
+    if (state.isDragging) {
+        // 拖动时显示可见边框，让用户看清窗口范围
+        renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0.15f));
+    } else if (state.isHovering) {
         renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0.004f));
     } else {
         renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0.0f));
@@ -469,6 +457,18 @@ void TaskbarRenderer::Render(const RenderState& state) {
     // 鼠标悬停时绘制控制按钮
     if (state.isHovering) {
         DrawHoverControls(state.isPlaying);
+    }
+
+    // 拖动时绘制可见边框
+    if (state.isDragging) {
+        D2D1_RECT_F borderRect = D2D1::RectF(0, 0, static_cast<FLOAT>(width_), static_cast<FLOAT>(height_));
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> dragBorderBrush;
+        renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.3f, 0.6f, 1.0f, 0.6f),
+            dragBorderBrush.GetAddressOf());
+        if (dragBorderBrush) {
+            renderTarget_->DrawRectangle(borderRect, dragBorderBrush.Get(), 2.0f);
+        }
     }
 
     HRESULT hr = renderTarget_->EndDraw();

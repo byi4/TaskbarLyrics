@@ -61,6 +61,7 @@ struct RenderState {
     bool        isPlaying{false};
     double      currentTime{0.0};     // 秒
     bool        isHovering{false};    // 鼠标是否悬停在歌词窗口上
+    bool        isDragging{false};    // 是否正在拖动歌词窗口
 };
 
 } // namespace moekoe

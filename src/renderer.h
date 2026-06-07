@@ -16,8 +16,8 @@
 namespace moekoe {
 
 struct RendererSettings {
-    std::string highlightColor{"#FFFFFF"};
-    std::string normalColor{"#999999"};
+    std::string highlightColor{"#4CC2FF"};
+    std::string normalColor{"#333333"};
     float       normalOpacity{0.85f};
     std::string fontFamily{"Microsoft YaHei UI"};
     int         fontSize{14};

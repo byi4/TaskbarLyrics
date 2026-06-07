@@ -67,6 +67,7 @@ HttpServer::~HttpServer() {
 bool HttpServer::Start(int port) {
     if (running_.load()) return true;
     stopRequested_.store(false);
+    port_ = port;
 
     serverThread_ = std::thread([this, port]() { ServerLoop(port); });
     return true;
@@ -81,7 +82,7 @@ void HttpServer::Stop() {
     if (tmp != INVALID_SOCKET) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
-        addr.sin_port = htons(6521); // 使用固定端口
+        addr.sin_port = htons(static_cast<u_short>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         connect(tmp, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
         closesocket(tmp);

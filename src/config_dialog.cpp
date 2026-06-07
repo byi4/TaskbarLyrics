@@ -58,6 +58,12 @@ std::function<void()>& GetOnUnbind() {
     return s_onUnbind;
 }
 
+// 线程局部：对话框结果（OK/Apply = true）
+bool& GetDialogResult() {
+    static bool s_result = false;
+    return s_result;
+}
+
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int len = ::MultiByteToWideChar(CP_UTF8, 0, s.data(),
@@ -163,6 +169,9 @@ bool ConfigDialog::Show(HINSTANCE hInstance, HWND parent, Config& config,
     // 保存 onUnbind 回调
     GetOnUnbind() = std::move(onUnbind);
 
+    // 重置对话框结果
+    GetDialogResult() = false;
+
     // 创建窗口（可调整大小，标题栏可拖动）
     HWND hwnd = ::CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -192,7 +201,6 @@ bool ConfigDialog::Show(HINSTANCE hInstance, HWND parent, Config& config,
 
     // 模态消息循环（不能用 PostQuitMessage，否则会杀死主程序）
     bool dialogActive = true;
-    bool result = false;
     MSG msg{};
     while (dialogActive && ::IsWindow(hwnd) && ::GetMessageW(&msg, nullptr, 0, 0)) {
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
@@ -212,7 +220,7 @@ bool ConfigDialog::Show(HINSTANCE hInstance, HWND parent, Config& config,
     ::EnableWindow(parent, TRUE);
     ::SetForegroundWindow(parent);
 
-    return result;
+    return GetDialogResult();
 }
 
 void ConfigDialog::InitControls(HWND hwnd, const Config& config, bool boundMode) {
@@ -410,6 +418,7 @@ INT_PTR CALLBACK ConfigDialog::DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         }
         case IDC_BTN_OK: {
             if (config && ReadControls(hwnd, *config)) {
+                GetDialogResult() = true;
                 ::DestroyWindow(hwnd);
             } else {
                 ::MessageBoxW(hwnd, L"保存配置失败", L"错误", MB_OK | MB_ICONERROR);
@@ -423,6 +432,7 @@ INT_PTR CALLBACK ConfigDialog::DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         case IDC_BTN_APPLY: {
             if (config) {
                 ReadControls(hwnd, *config);
+                GetDialogResult() = true; // 让调用者知道需要应用设置
             }
             return TRUE;
         }
