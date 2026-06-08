@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // websocket_client.cpp - WebSocket 客户端实现
 #include "websocket_client.h"
+#include "api_enabler.h"
 #include "constants.h"
 
 #include <ixwebsocket/IXWebSocket.h>
@@ -214,21 +215,10 @@ void WebSocketClient::Disconnect() {
         } catch (...) { /* ignore */ }
     }
 
+    // 协作式等待：ReconnectLoop 内部已使用短间隔轮询 stopRequested_，
+    // 理论上应在 ~100ms 内退出。保留超时作为安全网。
     if (reconnectThread_.joinable()) {
-        HANDLE hThread = reconnectThread_.native_handle();
-        if (hThread) {
-            // 等待最多 THREAD_JOIN_TIMEOUT_MS 毫秒
-            DWORD waitRet = WaitForSingleObject(hThread, constants::THREAD_JOIN_TIMEOUT_MS);
-            if (waitRet == WAIT_TIMEOUT) {
-                // 超时，强制终止线程
-                TerminateThread(hThread, 0);
-                reconnectThread_.detach();
-            } else {
-                reconnectThread_.join();
-            }
-        } else {
-            reconnectThread_.join();
-        }
+        reconnectThread_.join();
     }
 
     if (connected_.exchange(false)) {
@@ -254,9 +244,9 @@ void WebSocketClient::ReconnectLoop() {
     int attempt = 0;
     DebugLog("ReconnectLoop started");
     while (!stopRequested_.load()) {
-        // 如果已连接,持续监控
+        // 如果已连接,持续监控（短间隔以快速响应 stopRequested_）
         if (connected_.load() && client_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(constants::WS_CONNECTED_POLL_MS));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
 
@@ -331,6 +321,14 @@ void WebSocketClient::ReconnectLoop() {
             // 启动失败,等待下个循环重连
             try { client_->stop(); } catch (...) {}
             client_.reset();
+
+            // 连续多次失败后，尝试检测并自动开启 MoeKoeMusic 的 API 模式
+            // 仅在 attempt == 2（即第3次失败，约已等待 1+2=3 秒）时触发一次
+            if (attempt == 2) {
+                DebugLog("Reconnect: triggering API auto-enable check...");
+                auto result = ApiEnabler::TryEnableApi();
+                DebugLog("Reconnect: API auto-enable result = " + ApiEnabler::ResultToString(result));
+            }
         } else {
             DebugLog("Reconnect: connected successfully");
         }
@@ -339,6 +337,12 @@ void WebSocketClient::ReconnectLoop() {
 }
 
 void WebSocketClient::DispatchWsMessage(const std::string& raw) {
+    // 安全检查：拒绝过大的消息，防止内存耗尽
+    if (raw.size() > constants::MAX_WS_MESSAGE_SIZE) {
+        DebugLog("[WS] Message too large: " + std::to_string(raw.size()) + " bytes (max: " + std::to_string(constants::MAX_WS_MESSAGE_SIZE) + "), discarded");
+        return;
+    }
+
     json j;
     try {
         j = json::parse(raw);

@@ -8,10 +8,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 #include <shlobj.h>
 #include <windows.h>
 
 namespace moekoe {
+
+// ── 本地辅助函数：UTF-8 ↔ 宽字符转换 ──
+static std::string WideToUtf8(const std::wstring& ws) {
+    if (ws.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string s(n - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, &s[0], n, nullptr, nullptr);
+    return s;
+}
 
 namespace {
 
@@ -77,6 +88,11 @@ bool Config::Load() {
             appearance_.fontSize          = a.value("font_size",         appearance_.fontSize);
             appearance_.enableKaraoke     = a.value("enable_karaoke",    appearance_.enableKaraoke);
             appearance_.enableTranslation = a.value("enable_translation", appearance_.enableTranslation);
+            appearance_.enableMarquee     = a.value("enable_marquee",    appearance_.enableMarquee);
+            appearance_.marqueeMode       = a.value("marquee_mode",      appearance_.marqueeMode);
+            appearance_.marqueeDelayMs    = a.value("marquee_delay_ms",  appearance_.marqueeDelayMs);
+            appearance_.marqueePauseMs    = a.value("marquee_pause_ms",  appearance_.marqueePauseMs);
+            appearance_.marqueeSpeedPxPerSec = static_cast<float>(a.value("marquee_speed_px_per_sec", static_cast<double>(appearance_.marqueeSpeedPxPerSec)));
         }
 
         if (j.contains("advanced")) {
@@ -91,6 +107,15 @@ bool Config::Load() {
             position_.offsetX = p.value("offset_x", position_.offsetX);
             position_.offsetY = p.value("offset_y", position_.offsetY);
         }
+
+        // 范围验证：将异常值 clamp 到合理区间
+        appearance_.normalOpacity       = std::clamp(appearance_.normalOpacity, 0.0, 1.0);
+        appearance_.fontSize            = std::clamp(appearance_.fontSize, 8, 72);
+        appearance_.marqueeDelayMs      = std::clamp(appearance_.marqueeDelayMs, 0, 10000);
+        appearance_.marqueePauseMs      = std::clamp(appearance_.marqueePauseMs, 0, 10000);
+        appearance_.marqueeSpeedPxPerSec = std::clamp(appearance_.marqueeSpeedPxPerSec, 10.0f, 500.0f);
+        advanced_.websocketPort   = std::clamp(advanced_.websocketPort, 1024, 65535);
+        advanced_.refreshRateHz   = std::clamp(advanced_.refreshRateHz, 1, 120);
 
         // 打印加载结果
         ConfigDebugLog("[CONFIG] Loaded: hl=%s nl=%s font=%s size=%d opacity=%.2f karaoke=%d trans=%d\n",
@@ -122,6 +147,11 @@ bool Config::Save() const {
         {"font_size",          appearance_.fontSize},
         {"enable_karaoke",     appearance_.enableKaraoke},
         {"enable_translation", appearance_.enableTranslation},
+        {"enable_marquee",     appearance_.enableMarquee},
+        {"marquee_mode",       appearance_.marqueeMode},
+        {"marquee_delay_ms",   appearance_.marqueeDelayMs},
+        {"marquee_pause_ms",   appearance_.marqueePauseMs},
+        {"marquee_speed_px_per_sec", appearance_.marqueeSpeedPxPerSec},
     };
 
     j["advanced"] = {
@@ -152,12 +182,15 @@ bool Config::SetAutoStartRegistry(bool enable) {
         0,
         KEY_SET_VALUE | KEY_QUERY_VALUE,
         &hKey);
-    if (result != ERROR_SUCCESS) return false;
+    if (result != ERROR_SUCCESS) {
+        ConfigDebugLog("[AUTOSTART] RegOpenKeyExW failed: %ld\n", result);
+        return false;
+    }
 
     bool ok = true;
     if (enable) {
         wchar_t exePath[MAX_PATH] = {0};
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        DWORD pathLen = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
         const std::string nameKey = GetAutoStartRegistryKey();
         const std::wstring nameW(nameKey.begin(), nameKey.end());
@@ -170,12 +203,22 @@ bool Config::SetAutoStartRegistry(bool enable) {
             REG_SZ,
             reinterpret_cast<const BYTE*>(exePath),
             byteCount);
-        if (result != ERROR_SUCCESS) ok = false;
+        if (result != ERROR_SUCCESS) {
+            ConfigDebugLog("[AUTOSTART] RegSetValueExW failed: %ld\n", result);
+            ok = false;
+        } else {
+            ConfigDebugLog("[AUTOSTART] Registry set: key=%s path=%s\n", nameKey.c_str(), WideToUtf8(exePath).c_str());
+        }
     } else {
         const std::string nameKey = GetAutoStartRegistryKey();
         const std::wstring nameW(nameKey.begin(), nameKey.end());
         result = RegDeleteValueW(hKey, nameW.c_str());
-        if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND) ok = false;
+        if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND) {
+            ConfigDebugLog("[AUTOSTART] RegDeleteValueW failed: %ld\n", result);
+            ok = false;
+        } else {
+            ConfigDebugLog("[AUTOSTART] Registry removed: key=%s\n", nameKey.c_str());
+        }
     }
 
     RegCloseKey(hKey);

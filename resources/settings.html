@@ -267,8 +267,8 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     <div class="row">
         <label>字号</label>
         <div class="slider-wrap">
-            <input type="range" id="fontSize" min="10" max="28" step="1" value="14">
-            <span class="slider-value" id="fontSizeVal">14</span>
+            <input type="range" id="fontSize" min="10" max="28" step="1" value="20">
+            <span class="slider-value" id="fontSizeVal">20</span>
         </div>
     </div>
 
@@ -304,6 +304,41 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     <div class="row">
         <label>显示翻译</label>
         <label class="switch"><input type="checkbox" id="translation" checked><span class="slider"></span></label>
+    </div>
+
+    <div class="section-title">长歌词滚动（跑马灯）</div>
+    <div class="row">
+        <label>启用跑马灯</label>
+        <label class="switch"><input type="checkbox" id="marquee" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+        <label>滚动模式</label>
+        <select id="marqueeMode">
+            <option value="bounce" selected>往返滚动（推荐）</option>
+            <option value="loop">循环跑马灯</option>
+            <option value="off">关闭（截断显示）</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>开始延迟</label>
+        <div class="slider-wrap">
+            <input type="range" id="marqueeDelay" min="0" max="5000" step="100" value="2000">
+            <span class="slider-value" id="marqueeDelayVal">2000 ms</span>
+        </div>
+    </div>
+    <div class="row">
+        <label>端点暂停</label>
+        <div class="slider-wrap">
+            <input type="range" id="marqueePause" min="0" max="3000" step="100" value="1000">
+            <span class="slider-value" id="marqueePauseVal">1000 ms</span>
+        </div>
+    </div>
+    <div class="row">
+        <label>滚动速度</label>
+        <div class="slider-wrap">
+            <input type="range" id="marqueeSpeed" min="10" max="200" step="5" value="40">
+            <span class="slider-value" id="marqueeSpeedVal">40 px/s</span>
+        </div>
     </div>
 
     <div class="section-title">预设主题</div>
@@ -356,8 +391,8 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     <div class="row">
         <label>刷新率</label>
         <div class="slider-wrap">
-            <input type="range" id="refreshRate" min="15" max="60" step="5" value="30">
-            <span class="slider-value" id="refreshRateVal">30 FPS</span>
+            <input type="range" id="refreshRate" min="15" max="120" step="5" value="60">
+            <span class="slider-value" id="refreshRateVal">60 FPS</span>
         </div>
     </div>
 
@@ -393,7 +428,7 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     </div>
 </div>
 
-<div class="footer">MoeKoe Taskbar Lyrics v0.3.0</div>
+<div class="footer">MoeKoe Taskbar Lyrics v0.3.1</div>
 
 <script>
 // ---- 与 C++ 宿主通信 ----
@@ -453,6 +488,9 @@ syncSlider(document.getElementById('opacity'), document.getElementById('opacityV
 syncSlider(document.getElementById('offsetX'), document.getElementById('offsetXVal'));
 syncSlider(document.getElementById('offsetY'), document.getElementById('offsetYVal'));
 syncSlider(document.getElementById('refreshRate'), document.getElementById('refreshRateVal'), ' FPS');
+syncSlider(document.getElementById('marqueeDelay'), document.getElementById('marqueeDelayVal'), ' ms');
+syncSlider(document.getElementById('marqueePause'), document.getElementById('marqueePauseVal'), ' ms');
+syncSlider(document.getElementById('marqueeSpeed'), document.getElementById('marqueeSpeedVal'), ' px/s');
 
 // ---- 预设主题 ----
 document.querySelectorAll('.theme-btn').forEach(btn => {
@@ -475,8 +513,8 @@ function applyConfigToUI(cfg) {
     const pos = cfg.position || {};
 
     // 外观
-    document.getElementById('fontFamily').value = a.font_family || 'Microsoft YaHei UI';
-    document.getElementById('fontSize').value = a.font_size || 14;
+    document.getElementById('fontFamily').value = a.font_family || '华文细黑';
+    document.getElementById('fontSize').value = a.font_size || 20;
     document.getElementById('normalColor').value = a.normal_color || '#333333';
     document.getElementById('normalColorHex').value = (a.normal_color || '#333333').toUpperCase();
     document.getElementById('highlightColor').value = a.highlight_color || '#4CC2FF';
@@ -485,13 +523,20 @@ function applyConfigToUI(cfg) {
     document.getElementById('karaoke').checked = a.enable_karaoke !== false;
     document.getElementById('translation').checked = a.enable_translation !== false;
 
+    // 跑马灯
+    document.getElementById('marquee').checked = a.enable_marquee !== false;
+    document.getElementById('marqueeMode').value = a.marquee_mode || 'bounce';
+    document.getElementById('marqueeDelay').value = a.marquee_delay_ms || 2000;
+    document.getElementById('marqueePause').value = a.marquee_pause_ms || 1000;
+    document.getElementById('marqueeSpeed').value = a.marquee_speed_px_per_sec || 40;
+
     // 位置
     document.getElementById('offsetX').value = pos.offset_x || 0;
     document.getElementById('offsetY').value = pos.offset_y || 0;
 
     // 高级
     document.getElementById('wsPort').value = adv.websocket_port || 6520;
-    document.getElementById('refreshRate').value = adv.refresh_rate_hz || 30;
+    document.getElementById('refreshRate').value = adv.refresh_rate_hz || 60;
     document.getElementById('debugLog').checked = !!adv.debug_log;
 
     // 触发所有滑块同步
@@ -511,6 +556,11 @@ function collectConfig() {
             font_size: parseInt(document.getElementById('fontSize').value),
             enable_karaoke: document.getElementById('karaoke').checked,
             enable_translation: document.getElementById('translation').checked,
+            enable_marquee: document.getElementById('marquee').checked,
+            marquee_mode: document.getElementById('marqueeMode').value,
+            marquee_delay_ms: parseInt(document.getElementById('marqueeDelay').value),
+            marquee_pause_ms: parseInt(document.getElementById('marqueePause').value),
+            marquee_speed_px_per_sec: parseFloat(document.getElementById('marqueeSpeed').value),
         },
         position: {
             offset_x: parseInt(document.getElementById('offsetX').value),

@@ -1,8 +1,9 @@
 # MoeKoeMusic 任务栏歌词插件 — 开发文档
 
-> **版本：** v0.3（草案）\
+> **版本：** v0.5（草案）\
+> **插件版本：** v0.3.1\
 > **目标平台：** Windows 10/11（x64）\
-> **开发语言：** C++20\
+> **开发语言：** C++17\
 > **构建系统：** CMake + MSVC\
 > **协议：** GPL-2.0（继承自 MoeKoeMusic）
 
@@ -13,14 +14,6 @@
 1. [项目概述](#1-项目概述)
 2. [技术架构](#2-技术架构)
 3. [模块设计](#3-模块设计)
-   - 3.1 [歌词数据获取模块](#31-歌词数据获取模块)
-   - 3.2 [任务栏嵌入窗口模块](#32-任务栏嵌入窗口模块)
-   - 3.3 [歌词同步与解析模块](#33-歌词同步与解析模块)
-   - 3.4 [渲染引擎模块](#34-渲染引擎模块)
-   - 3.5 [配置管理模块](#35-配置管理模块)
-   - 3.6 [系统托盘模块](#36-系统托盘模块)
-   - 3.7 [进程监控模块](#37-进程监控模块)
-   - 3.8 [主程序入口](#38-主程序入口)
 4. [协议与接口](#4-协议与接口)
 5. [构建与部署](#5-构建与部署)
 6. [扩展与维护](#6-扩展与维护)
@@ -36,7 +29,9 @@ MoeKoeMusic 是一款基于 Electron + Vue 3 的开源音乐播放器，其 Wind
 
 ### 1.2 目标
 
-开发一个**独立的任务栏歌词插件**，将歌词**嵌入到 Windows 任务栏内部**（而非悬浮在任务栏上方），实现与系统 UI 无缝融合的歌词显示体验。
+开发一个**独立的任务栏歌词插件**，将歌词以**浮动窗口覆盖在任务栏上方**的方式显示，实现与系统 UI 融合的歌词显示体验。
+
+> **注意：** 原文档规划使用 `SetParent` 将歌词窗口嵌入为任务栏子窗口，但由于 Win11 任务栏结构变化导致该方案不稳定，实际采用独立浮动窗口 + WS_EX_TOPMOST 方案（类似 TranslucentTB、TrafficMonitor 等成熟项目）。
 
 ### 1.3 设计原则
 
@@ -45,8 +40,8 @@ MoeKoeMusic 是一款基于 Electron + Vue 3 的开源音乐播放器，其 Wind
 | **零侵入**   | 不修改 MoeKoeMusic 本体任何文件，独立 EXE 运行 |
 | **独立维护**  | 插件可脱离主程序版本独立迭代                   |
 | **轻量高效**  | CPU 占用 < 2%，内存占用 < 20MB          |
-| **用户友好**  | 即开即用，系统托盘右键菜单控制启用/禁用             |
-| **嵌入任务栏** | 歌词窗口作为任务栏的子窗口，视觉上融为一体            |
+| **用户友好**  | 即开即用，系统托盘右键菜单控制启用/禁用，WebView2 GUI 设置界面  |
+| **覆盖任务栏** | 独立浮动窗口 + WS_EX_TOPMOST，视觉上与任务栏融合    |
 
 ### 1.4 数据获取策略
 
@@ -65,19 +60,28 @@ MoeKoeMusic-TaskbarLyrics/
 ├── CMakeLists.txt              # CMake 构建配置
 ├── README.md                   # 插件说明
 ├── src/
-│   ├── main.cpp                # 程序入口
-│   ├── websocket_client.cpp/h  # WebSocket 数据接收
-│   ├── lyrics_parser.cpp/h     # 歌词 JSON 解析 & LRC 同步
-│   ├── taskbar_window.cpp/h    # 任务栏嵌入窗口管理
-│   ├── renderer.cpp/h          # Direct2D 渲染引擎
-│   ├── config.cpp/h            # 配置管理
-│   ├── process_monitor.cpp/h   # 进程监控（绑定模式）
-│   └── tray_icon.cpp/h         # 系统托盘图标
+│   ├── constants.h             # 全局命名常量（端口、尺寸、消息号、UI参数、跑马灯参数）
+│   ├── main.cpp                # 程序入口（WinMain，5阶段初始化）
+│   ├── websocket_client.cpp/h  # WebSocket 数据接收（ixwebsocket）+ API 自动开启集成
+│   ├── http_server.cpp/h       # HTTP 服务器（:6523，Chrome Extension 通信）
+│   ├── lyrics_parser.cpp/h     # 歌词 JSON 解析 & LRC/KRC 同步
+│   ├── taskbar_window.cpp/h    # 任务栏浮动窗口管理 + Z-order 三重防护
+│   ├── renderer.cpp/h          # Direct2D 渲染引擎 + 跑马灯状态机
+│   ├── config.cpp/h            # 配置管理（JSON + 注册表自启）
+│   ├── api_enabler.cpp/h       # MoeKoeMusic API 模式自动检测与开启（v0.3.1 新增）
+│   ├── process_monitor.cpp/h   # 进程监控（绑定模式，代码已完成待接入）
+│   ├── tray_icon.cpp/h         # 系统托盘图标+菜单
+│   ├── settings_window.cpp/h   # WebView2 设置窗口（含 COM 回调）
+│   ├── config_dialog.cpp/h     # Win32 回退设置对话框
+│   └── app_icon.rc             # EXE 图标资源
 ├── resources/
-│   ├── icon.ico                # 托盘图标
-│   └── font/                   # 自定义字体（可选）
-└── scripts/
-    └── build.bat               # 一键构建脚本
+│   ├── icon.ico                # 托盘/程序图标
+│   ├── settings.html           # WebView2 设置页面（含跑马灯控制 UI）
+│   └── icon.png                # Chrome Extension 图标
+└── chrome-extension/            # Chrome Extension 插件
+    ├── manifest.json           # v0.3.1（icons 128 排首优化）
+    ├── popup.html/js
+    └── native_host/
 ```
 
 ***
@@ -94,8 +98,6 @@ MoeKoeMusic-TaskbarLyrics/
 │  │ (歌词状态)  │    │                  │    │ (HTTP :6521) │  │
 │  └─────┬──────┘    └────────┬─────────┘    └──────────────┘  │
 │        │                    │                                 │
-│        │  IPC: lyrics-data  │                                 │
-│        │  IPC: play-pause   │                                 │
 │        ▼                    ▼                                 │
 │  ┌──────────────────────────────────────────────────────┐     │
 │  │              WebSocket Server (:6520)                 │     │
@@ -108,12 +110,6 @@ MoeKoeMusic-TaskbarLyrics/
 ┌─────────────────────────────────────────────────────────────┐
 │                任务栏歌词插件 (独立 EXE)                      │
 │                                                             │
-│  ┌──────────────────┐                                       │
-│  │ 进程监控模块       │  ← 绑定模式：每 2 秒轮询 MoeKoeMusic │
-│  │ ProcessMonitor   │     独立模式：跳过此模块               │
-│  └────────┬─────────┘                                       │
-│           │ MoeKoeMusic 启动/退出事件                        │
-│           ▼                                                  │
 │  ┌─────────────────┐    ┌──────────────────┐               │
 │  │ WebSocket Client │───▶│ 歌词解析器        │               │
 │  │ (连接 :6520)     │    │ (JSON→时间轴)    │               │
@@ -122,27 +118,34 @@ MoeKoeMusic-TaskbarLyrics/
 │                                  ▼                          │
 │  ┌──────────────────────────────────────────────────┐      │
 │  │              Direct2D 渲染引擎                     │      │
-│  │   逐帧绘制文字 → 更新 Layered Window 内容          │      │
+│  │   逐帧绘制文字 → WIC Bitmap → UpdateLayeredWindow  │      │
 │  └──────────────────────┬───────────────────────────┘      │
 │                         │                                   │
 │                         ▼                                   │
 │  ┌──────────────────────────────────────────────────┐      │
-│  │     嵌入任务栏内部的歌词子窗口                        │      │
+│  │     浮动歌词窗口 (WS_EX_TOPMOST + WS_EX_LAYERED)    │      │
 │  │  ┌────────────────────────────────────────────┐    │      │
 │  │  │  Windows 任务栏 (Shell_TrayWnd)              │    │      │
 │  │  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌────────────┐ │    │      │
 │  │  │  │ 开始 │ │搜索栏│ │ 任务 │ │ 🎵歌词窗口 │ │    │      │
-│  │  │  │     │ │      │ │ 按钮 │ │ (子窗口)   │ │    │      │
+│  │  │  │     │ │      │ │ 按钮 │ │(浮动覆盖)  │ │    │      │
 │  │  │  └──────┘ └──────┘ └──────┘ └────────────┘ │    │      │
-│  │  │  ┌────────────────────────────────────────┐ │    │      │
-│  │  │  │ 系统托盘 (通知区域)                      │ │    │      │
-│  │  │  └────────────────────────────────────────┘ │    │      │
 │  │  └────────────────────────────────────────────┘    │      │
 │  └──────────────────────────────────────────────────┘      │
 │                                                             │
 │  ┌──────────────────────┐                                   │
-│  │ 系统托盘图标 + 右键菜单│  启用/禁用/解除绑定/开机自启/退出  │
+│  │ 系统托盘图标 + 右键菜单│  启用/禁用/开机自启/设置/退出       │
 │  └──────────────────────┘                                   │
+│                                                             │
+│  ┌────────────────────────────────────────┐                │
+│  │ HTTP Server (:6523)                     │ ← Chrome Ext │
+│  │ native_host ↔ popup.js 通信             │                │
+│  └────────────────────────────────────────┘                │
+│                                                             │
+│  ┌────────────────────────────────────────┐                │
+│  │ WebView2 Settings Window                │                │
+│  │ settings.html (颜色/字体/滑块/GUI)      │                │
+│  └────────────────────────────────────────┘                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -150,12 +153,16 @@ MoeKoeMusic-TaskbarLyrics/
 
 | 层级    | 技术                             | 用途                    |
 | ----- | ------------------------------ | --------------------- |
-| 窗口系统  | Win32 API                      | 查找任务栏窗口句柄、创建子窗口       |
-| 图形渲染  | **Direct2D** + **DirectWrite** | GPU 加速的文字渲染           |
+| 窗口系统  | Win32 API                      | 创建浮动窗口、消息循环、DPI 感知       |
+| 图形渲染  | **Direct2D** + **DirectWrite** | GPU 加速的文字渲染（WIC BitmapRenderTarget） |
+| 内嵌浏览器 | **WebView2** (Edge Chromium)    | GUI 设置界面（回退 Win32 对话框）     |
 | 通信协议  | **WebSocket**（RFC 6455）        | 从 MoeKoeMusic 获取实时数据  |
+| 扩展通信  | **HTTP** (:6523)               | Chrome Extension popup.js 通信 |
 | 网络库   | **ixwebsocket**                | 轻量 C++ WebSocket 客户端库 |
-| 配置持久化 | JSON 文件                        | 保存用户首选项               |
+| JSON 解析 | **nlohmann/json**              | 配置文件 / WS 消息解析         |
+| 配置持久化 | JSON 文件 + Windows 注册表        | 用户首选项 + 开机自启            |
 | 系统托盘  | Win32 Shell API                | 托盘图标 + 右键菜单           |
+| 常量管理  | **constants.h**                | 集中管理所有魔数              |
 
 ### 2.3 关键性能目标
 
@@ -163,9 +170,32 @@ MoeKoeMusic-TaskbarLyrics/
 | -------------- | ------------------ |
 | CPU 占用 (空闲/播放) | < 0.5% / < 2%      |
 | 内存占用           | < 20 MB            |
-| 帧率 (歌词滚动)      | 30 FPS（人眼舒适）       |
-| 启动延迟           | < 500 ms（从启动到显示歌词） |
+| 帧率 (歌词滚动)      | 60 FPS 可配置（最高 120 FPS，MIN_FRAME_INTERVAL_MS=15ms） |
+| 启动延迟           | < 500 ms（从启动到显示歌词）     |
 | 渲染延迟           | < 5 ms（从数据到画面）     |
+
+### 2.4 全局常量体系 (`constants.h`)
+
+所有魔数集中定义在 `src/constants.h`，使用 `namespace moekoe::constants` 组织：
+
+| 分类 | 常量名 | 值 | 用途 |
+|------|--------|-----|------|
+| 端口 | `WEBSOCKET_LISTEN_PORT` | 6520 | WS 歌词数据 |
+| 端口 | `HTTP_SERVER_PORT` | 6523 | Extension 通信 |
+| 渲染 | `MIN_FRAME_INTERVAL_MS` | 15 | 最小帧间隔 |
+| 尺寸 | `LYRIC_HEIGHT_BASE_DP` | 28 | 歌词高度(96DPI基准) |
+| 尺寸 | `MAX_LYRIC_WIDTH_BASE_DP` | 360 | 歌词最大宽度 |
+| UI | `TEXT_PADDING_X` | 20.0f | 文本左右内边距 |
+| UI | `BUTTON_SPACING` | 2.0f | 控制按钮间距 |
+| 消息号 | `WM_TRAY_CALLBACK` | 0x0600 | 托盘回调 |
+| 消息号 | `WM_RENDER_UPDATE` | 0x0700 | 渲染更新请求 |
+| 消息号 | `WM_PROCESS_EXITED` | 0x0800 | 进程退出通知 |
+| 安全 | `MAX_WS_MESSAGE_SIZE` | 1MB | WS 消息大小上限 |
+| 系统 | `WINDOWS_TOOLTIP_MAX_LEN` | 127 | Tooltip 最大长度 |
+| 跑马灯 | `MARQUEE_DELAY_MS` | 2000 | 滚动前延迟（ms） |
+| 跑马灯 | `MARQUEE_PAUSE_MS` | 1000 | 滚动后暂停（ms） |
+| 跑马灯 | `MARQUEE_SPEED_PX_PER_SEC` | 40 | 默认滚动速度（px/s） |
+| 跑马灯 | `MARQUEE_SPEEDUP_THRESHOLD` | 2.0f | 超长歌词加速阈值（倍数） |
 
 ***
 
@@ -179,1071 +209,423 @@ MoeKoeMusic-TaskbarLyrics/
 
 - 连接 MoeKoeMusic 的 WebSocket 服务器（`ws://127.0.0.1:6520`）
 - 接收并分发 `lyrics` 和 `playerState` 消息
-- 自动重连（断线检测 + 指数退避）
+- 自动重连（断线检测 + 指数退避，使用 constants.h 常量）
+- 发送控制指令（toggle/next/prev）
 
-#### 接口设计
+#### 关键实现细节
 
-```cpp
-// websocket_client.h
+- **协作式线程退出**：`Disconnect()` 设置 `stopRequested_ = true` 后调用 `reconnectThread_.join()`，不再使用 TerminateThread
+- **已连接状态轮询间隔**：50ms（`WS_CONNECTED_POLL_MS`），快速响应停止请求
+- **消息大小限制**：`DispatchWsMessage()` 入口检查 `raw.size() > MAX_WS_MESSAGE_SIZE`(1MB)，超限丢弃并记录日志
+- **KRC 格式解析**：MoeKoeMusic 实际推送 KRC 格式字符串，在 `ParseKrc()` 中内联实现
 
-class WebSocketClient {
-public:
-    using LyricsCallback = std::function<void(const LyricsData&)>;
-    using StateCallback  = std::function<void(const PlayerState&)>;
+#### 重连策略（constants.h 定义）
 
-    WebSocketClient();
-    ~WebSocketClient();
+| 尝试次数   | 等待时间（粒度 × 次数）     |
+| ------ | -------------------- |
+| 第 1 次  | 1 × 100ms = 100ms（连接超时5s） |
+| 第 2 次  | 2 × 100ms = 200ms     |
+| ...   | ...                  |
+| 第 5+ 次 | 15 秒（上限）          |
 
-    // 连接到 MoeKoeMusic WebSocket 服务
-    bool Connect(const std::string& url = "ws://127.0.0.1:6520");
+### 3.2 HTTP 服务器模块
 
-    // 断开连接
-    void Disconnect();
+**文件：** `src/http_server.cpp/h`
 
-    // 注册歌词数据回调
-    void OnLyrics(LyricsCallback cb);
+#### 职责
 
-    // 注册播放状态回调
-    void OnPlayerState(StateCallback cb);
+- 监听端口 6523，提供 Chrome Extension popup.js 通信接口
+- 静态文件服务（settings.html、icon.png 等）
+- 协作式线程退出（同 WebSocket 客户端模式）
 
-    // 发送控制指令（可选功能）
-    void SendControl(const std::string& command);  // toggle/next/prev
-
-    // 连接状态
-    bool IsConnected() const;
-
-private:
-    void OnMessage(const std::string& raw);
-    void ReconnectLoop();
-
-    ix::WebSocket client_;
-    LyricsCallback on_lyrics_;
-    StateCallback on_state_;
-    std::atomic<bool> connected_{false};
-    std::thread reconnect_thread_;
-};
-```
-
-#### 数据流
-
-```
-MoeKoeMusic WebSocket Server (:6520)
-  │
-  │  {"type":"lyrics","data":[{...}]}
-  │  {"type":"playerState","data":{"isPlaying":true,"currentTime":12.5}}
-  ▼
-WebSocketClient::OnMessage()
-  │
-  ├─ type == "lyrics"      → 解析 → on_lyrics_() 回调
-  └─ type == "playerState"  → 解析 → on_state_() 回调
-```
-
-#### 重连策略
-
-| 尝试次数   | 等待时间     |
-| ------ | -------- |
-| 第 1 次  | 1 秒      |
-| 第 2 次  | 2 秒      |
-| 第 3 次  | 4 秒      |
-| 第 4 次  | 8 秒      |
-| 第 5+ 次 | 15 秒（上限） |
-
-***
-
-### 3.2 任务栏嵌入窗口模块
+### 3.3 任务栏浮动窗口模块
 
 **文件：** `src/taskbar_window.cpp/h`
 
-#### 3.2.1 职责
+#### 3.3.1 职责
 
 - 查找 Windows 任务栏窗口句柄（`Shell_TrayWnd`）
-- 在任务栏内部创建歌词子窗口（Layered Window）
+- 在任务栏上方创建**独立浮动 Layered Window**
 - 处理窗口消息（`WM_DPICHANGED`、`WM_SETTINGCHANGE` 等）
-- 监听任务栏变化（位置/大小/显隐）并自适应调整
+- 监听任务栏变化并自适应调整
+- 鼠标悬停检测 + 控制按钮交互
+- 拖动调整位置 + 视觉反馈
 
-#### 3.2.2 核心原理：将歌词窗口嵌入任务栏
-
-**关键技术：** 使用 `SetParent` 将歌词窗口设为任务栏窗口的子窗口，使歌词窗口在视觉上成为任务栏的一部分。
-
-```
-Windows 任务栏窗口层次:
-Shell_TrayWnd (任务栏主窗口)
-  ├── ReBarWindow32 (工具栏容器)
-  │   ├── MSTaskSwWClass (任务按钮区)
-  │   └── SearchBox / SearchBoxEx (搜索框)
-  ├── Shell_SecondaryTrayWnd (系统托盘/通知区域)
-  └── [我们的歌词子窗口] ← 通过 SetParent 嵌入
-```
-
-#### 3.2.3 查找任务栏窗口句柄
+#### 3.3.2 窗口创建方式（实际方案）
 
 ```cpp
-HWND FindTaskbarHandle() {
-    // 方法1：通过窗口类名查找
-    HWND hTaskbar = FindWindow(L"Shell_TrayWnd", nullptr);
-    if (hTaskbar) return hTaskbar;
-
-    // 方法2：通过 AppBar 消息查找（兼容性更好）
-    APPBARDATA abd = { sizeof(abd) };
-    if (SHAppBarMessage(ABM_GETTASKBARPOS, &abd)) {
-        // AppBar 存在，任务栏窗口一定存在
-        return FindWindow(L"Shell_TrayWnd", nullptr);
-    }
-
-    return nullptr;
-}
+// 独立浮动窗口（非 SetParent 子窗口）
+const DWORD exStyle = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
+const DWORD style = WS_POPUP;  // 无 WS_EX_TRANSPARENT（需接收鼠标消息）
+HWND hLyrics = CreateWindowEx(exStyle, L"TaskbarLyricsClass",
+    L"", style, 0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
+// 通过 PositionWindow() 定位到任务栏上方
 ```
 
-#### 3.2.4 创建嵌入歌词窗口
+#### 3.3.3 与 SetParent 方案的关键区别
 
-```cpp
-HWND CreateEmbeddedLyricsWindow(HWND hTaskbar, HINSTANCE hInstance) {
-    // 1. 创建 Layered Window（透明、置顶、点击穿透）
-    const DWORD exStyle = WS_EX_LAYERED
-                        | WS_EX_TRANSPARENT     // 鼠标点击穿透
-                        | WS_EX_NOACTIVATE;     // 点击不激活
+| 维度          | SetParent 嵌入（原规划）          | 浮动覆盖（实际实现）           |
+| ----------- | ----------------------- | ------------------ |
+| **父窗口**     | `Shell_TrayWnd`（任务栏）     | `nullptr`（顶层窗口）    |
+| **定位方式**    | 任务栏客户区坐标            | 屏幕坐标，紧贴任务栏边缘      |
+| **Z-order** | 继承任务栏 Z-order          | `WS_EX_TOPMOST` 置顶    |
+| **任务栏隐藏**   | 窗口随任务栏一起隐藏           | 需主动监听 WM_SETTINGCHANGE |
+| **鼠标穿透**   | 可选                     | 不使用（需接收鼠标消息）     |
+| **稳定性**    | Win11 下不稳定              | ✅ 成熟方案           |
 
-    const DWORD style = WS_POPUP | WS_VISIBLE;
-
-    HWND hLyrics = CreateWindowEx(
-        exStyle,
-        L"TaskbarLyricsClass",
-        L"",
-        style,
-        0, 0, 0, 0,  // 初始位置/尺寸，后续由 PositionWindow() 设置
-        hTaskbar,      // 父窗口 = 任务栏
-        nullptr,
-        hInstance,
-        nullptr
-    );
-
-    if (!hLyrics) return nullptr;
-
-    // 2. 将窗口设为任务栏的子窗口
-    SetParent(hLyrics, hTaskbar);
-
-    // 3. 设置窗口位置（嵌入任务栏内部）
-    PositionLyricsInTaskbar(hLyrics, hTaskbar);
-
-    return hLyrics;
-}
-```
-
-#### 3.2.5 歌词窗口在任务栏内的定位
-
-```cpp
-struct TaskbarInfo {
-    RECT rect;          // 任务栏区域（屏幕坐标）
-    RECT workArea;      // 工作区（排除任务栏）
-    enum Position { BOTTOM, TOP, LEFT, RIGHT } position;
-    UINT dpi;           // 当前 DPI
-};
-
-TaskbarInfo DetectTaskbarPosition(HWND hTaskbar) {
-    TaskbarInfo info;
-
-    // 1. 获取任务栏位置
-    APPBARDATA abd = { sizeof(abd) };
-    SHAppBarMessage(ABM_GETTASKBARPOS, &abd);
-    info.rect = abd.rc;
-
-    // 2. 获取工作区
-    HMONITOR monitor = MonitorFromWindow(hTaskbar, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfo(monitor, &mi);
-    info.workArea = mi.rcWork;
-
-    // 3. 推断任务栏方位
-    if (info.rect.top >= mi.rcWork.bottom)    info.position = BOTTOM;
-    else if (info.rect.left >= mi.rcWork.right) info.position = RIGHT;
-    else if (info.rect.right <= mi.rcWork.left) info.position = LEFT;
-    else                                         info.position = TOP;
-
-    // 4. 获取 DPI
-    info.dpi = GetDpiForWindow(hTaskbar);
-
-    return info;
-}
-
-void PositionLyricsInTaskbar(HWND hLyrics, HWND hTaskbar) {
-    TaskbarInfo info = DetectTaskbarPosition(hTaskbar);
-
-    // 获取任务栏的实际尺寸（用于子窗口坐标计算）
-    RECT taskbarRect;
-    GetWindowRect(hTaskbar, &taskbarRect);
-
-    // 将屏幕坐标转换为任务栏窗口的客户区坐标
-    POINT pt = { 0, 0 };
-    ScreenToClient(hTaskbar, &pt);
-
-    int taskbarWidth  = taskbarRect.right - taskbarRect.left;
-    int taskbarHeight = taskbarRect.bottom - taskbarRect.top;
-
-    int lyricsWidth, lyricsHeight, lyricsX, lyricsY;
-
-    switch (info.position) {
-    case BOTTOM: {
-        // Windows 10/11 默认：任务栏在底部
-        // 歌词窗口占据任务栏的上部区域（时钟/通知区域上方）
-        lyricsWidth  = taskbarWidth;
-        lyricsHeight = MulDiv(28, info.dpi, 96);  // 28pt 按 DPI 缩放
-        lyricsX = 0;
-        lyricsY = 0;  // 任务栏客户区顶部
-        break;
-    }
-    case TOP: {
-        lyricsWidth  = taskbarWidth;
-        lyricsHeight = MulDiv(28, info.dpi, 96);
-        lyricsX = 0;
-        lyricsY = taskbarHeight - lyricsHeight;
-        break;
-    }
-    case LEFT: {
-        lyricsWidth  = MulDiv(180, info.dpi, 96);
-        lyricsHeight = MulDiv(28, info.dpi, 96);
-        lyricsX = taskbarWidth - lyricsWidth;
-        lyricsY = 0;
-        break;
-    }
-    case RIGHT: {
-        lyricsWidth  = MulDiv(180, info.dpi, 96);
-        lyricsHeight = MulDiv(28, info.dpi, 96);
-        lyricsX = 0;
-        lyricsY = 0;
-        break;
-    }
-    }
-
-    SetWindowPos(hLyrics, nullptr,
-        lyricsX, lyricsY, lyricsWidth, lyricsHeight,
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
-```
-
-#### 3.2.6 与"悬浮在上方"方案的关键区别
-
-| 维度          | 悬浮在任务栏上方（旧方案）          | 嵌入任务栏内部（本方案）         |
-| ----------- | ---------------------- | -------------------- |
-| **父窗口**     | `nullptr`（顶层窗口）        | `Shell_TrayWnd`（任务栏） |
-| **定位方式**    | 屏幕坐标，紧贴任务栏边缘           | 任务栏客户区坐标，在任务栏内部      |
-| **视觉融合**    | 歌词浮在任务栏上方，有缝隙          | 歌词在任务栏内部，无缝融合        |
-| **Z-order** | `WS_EX_TOPMOST` 置顶     | 继承任务栏 Z-order        |
-| **任务栏隐藏**   | 窗口留在屏幕上                | 窗口随任务栏一起隐藏           |
-| **全屏应用**    | 窗口遮挡全屏内容               | 窗口随任务栏一起隐藏           |
-| **点击穿透**    | 必须 `WS_EX_TRANSPARENT` | 可选（任务栏区域本身可交互）       |
-
-#### 3.2.7 消息处理
-
-```cpp
-LRESULT CALLBACK TaskbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE:
-        // 初始化渲染器
-        break;
-
-    case WM_DPICHANGED: {
-        // DPI 变化时重新计算位置
-        HWND hTaskbar = GetParent(hwnd);
-        PositionLyricsInTaskbar(hwnd, hTaskbar);
-        // 通知渲染器更新 DPI
-        break;
-    }
-
-    case WM_SETTINGCHANGE:
-        // 任务栏可能变化（隐藏/显示/移动/大小调整）
-        if (wParam == SPI_SETWORKAREA) {
-            HWND hTaskbar = GetParent(hwnd);
-            PositionLyricsInTaskbar(hwnd, hTaskbar);
-        }
-        break;
-
-    case WM_DISPLAYCHANGE:
-        // 分辨率变化
-        HWND hTaskbar = GetParent(hwnd);
-        PositionLyricsInTaskbar(hwnd, hTaskbar);
-        break;
-
-    case WM_TIMER:
-        // 定时刷新歌词进度
-        RenderFrame();
-        break;
-
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        break;
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-```
-
-#### 3.2.8 任务栏变化监听
-
-除了被动响应 `WM_SETTINGCHANGE`，还需要**主动轮询**检测任务栏尺寸变化（某些场景下系统不发送通知）：
-
-```cpp
-// 在 WM_TIMER 中每 500ms 检查一次任务栏尺寸
-void CheckTaskbarResize(HWND hLyrics, HWND hTaskbar) {
-    static RECT lastRect = {0};
-    RECT currentRect;
-    GetWindowRect(hTaskbar, &currentRect);
-
-    if (!EqualRect(&lastRect, &currentRect)) {
-        lastRect = currentRect;
-        PositionLyricsInTaskbar(hLyrics, hTaskbar);
-    }
-}
-```
-
-#### 3.2.9 窗口刷新机制
-
-- 使用 `WM_TIMER` 定时器，间隔 **33ms**（≈30 FPS）
-- 仅在歌词或进度变化时触发 `UpdateLayeredWindow`
-- 空闲状态（无歌词或无播放）停止定时器以节省资源
-
-***
-
-### 3.3 歌词同步与解析模块
+### 3.4 歌词同步与解析模块
 
 **文件：** `src/lyrics_parser.cpp/h`
 
-#### 3.3.1 职责
-
-- 解析 MoeKoeMusic 的 JSON 歌词数据（逐字符时间轴格式）
-- 维护当前歌词索引和时间同步
-- 输出当前应显示的歌词文本和进度
-
-#### 3.3.2 数据结构
+#### 数据结构
 
 ```cpp
-// 歌词单字时间轴（MoeKoeMusic 原始格式）
-struct CharacterTiming {
-    std::string ch;          // 字符
-    int64_t startTime;       // 开始时间 (ms)
-    int64_t endTime;         // 结束时间 (ms)
-};
-
-// 歌词行
-struct LyricLine {
-    std::string text;        // 完整行文本
-    std::string translated;  // 翻译文本（可选）
-    std::vector<CharacterTiming> characters;  // 逐字时间轴
-};
-
-// 完整歌词数据
-struct LyricsData {
-    std::vector<LyricLine> lines;
-};
-
-// 播放器状态
-struct PlayerState {
-    bool isPlaying;
-    double currentTime;        // 当前进度 (秒)
-    std::string songTitle;     // 当前歌曲标题（可选，用于调试）
-};
-
-// 当前渲染状态（由解析器计算）
+struct CharacterTiming { std::string ch; int64_t startTime; int64_t endTime; };
+struct LyricLine { std::string text; std::string translated; std::vector<CharacterTiming> characters; };
+struct LyricsData { std::vector<LyricLine> lines; };
+struct PlayerState { bool isPlaying; double currentTime; std::string songTitle; };
 struct RenderState {
-    std::string currentLine;       // 当前行文本
-    std::string currentTranslated; // 当前行翻译
-    double progress;               // 当前行进度 0.0 ~ 1.0
-    int currentLineIndex;          // 当前行索引
+    std::string currentLine, currentTranslated;
+    double progress; int currentLineIndex;
+    bool isHovering, isDragging;  // 悬停/拖动状态
 };
 ```
 
-#### 3.3.3 核心逻辑
+#### 核心逻辑
 
-```cpp
-class LyricsParser {
-public:
-    LyricsParser();
+- `UpdateLyrics()` — 线程安全（mutex 保护），更新歌词数据
+- `UpdatePlayerState()` — 更新播放状态
+- `GetCurrentRenderState()` — 二分查找当前行 + 逐字进度计算
+- `ParseLRC()` — LRC 格式备用解析
+- `ParseKrc()` — KRC 格式解析（MoeKoeMusic 实际使用的格式）
 
-    // 更新歌词数据（从 WebSocket 接收时调用）
-    void UpdateLyrics(const LyricsData& data);
-
-    // 更新播放状态
-    void UpdatePlayerState(const PlayerState& state);
-
-    // 计算当前应显示的渲染状态（主循环每帧调用）
-    RenderState GetCurrentRenderState() const;
-
-    // 歌词是否有效
-    bool HasLyrics() const;
-
-private:
-    LyricsData lyrics_;
-    PlayerState state_;
-
-    // 二分查找当前进度对应的歌词行
-    int FindLineIndex(double currentTimeSec) const;
-};
-```
-
-**GetCurrentRenderState 实现原理：**
-
-```
-1. 如果 !isPlaying → 保持当前显示状态
-2. 根据 currentTime 二分查找 lyrics_.lines 中对应的行索引
-3. 在该行的 characters 中，计算当前字符所处的进度位置：
-   progress = (currentTime - startTime) / (endTime - startTime)
-4. 如果 currentTime 超出最后一行 → 显示空行或"播放结束"
-5. 返回 {currentLine, currentTranslated, progress, lineIndex}
-```
-
-#### 3.3.4 LRC 歌词兼容（备用方案）
-
-虽然优先使用 WebSocket 推送的 JSON 数据，但保留 LRC 解析能力作为备选：
-
-```cpp
-// LRC 解析 (备用)
-struct LrcLine {
-    double timeSec;
-    std::string text;
-};
-
-std::vector<LrcLine> ParseLRC(const std::string& lrcContent) {
-    std::vector<LrcLine> result;
-    std::regex pattern(R"(\[(\d{2}):(\d{2})\.(\d{2,3})\](.*))");
-
-    std::istringstream stream(lrcContent);
-    std::string line;
-    std::smatch match;
-
-    while (std::getline(stream, line)) {
-        if (std::regex_match(line, match, pattern)) {
-            int minutes = std::stoi(match[1]);
-            int seconds = std::stoi(match[2]);
-            double frac;
-            if (match[3].length() == 3)  // [mm:ss.xxx]
-                frac = std::stoi(match[3]) / 1000.0;
-            else                          // [mm:ss.xx]
-                frac = std::stoi(match[3]) / 100.0;
-
-            result.push_back({
-                minutes * 60 + seconds + frac,
-                match[4]
-            });
-        }
-    }
-
-    std::sort(result.begin(), result.end(),
-        [](const auto& a, const auto& b) { return a.timeSec < b.timeSec; });
-    return result;
-}
-```
-
-***
-
-### 3.4 渲染引擎模块
+### 3.5 渲染引擎模块
 
 **文件：** `src/renderer.cpp/h`
 
-#### 3.4.1 职责
+#### 3.5.1 职责
 
-- 初始化 Direct2D 和 DirectWrite 工厂
-- 为 Layered Window 创建兼容的渲染目标
-- 绘制歌词文本（含卡拉 OK 高亮进度）
-- 管理 GPU 资源生命周期
+- 初始化 Direct2D/DirectWrite/WIC 工厂
+- 为 Layered Window 创建 WIC BitmapRenderTarget
+- 绘制歌词文本（卡拉 OK 逐字高亮 + PushAxisAlignedClip 裁剪）
+- 绘制翻译文本（小号字体居中）
+- 绘制悬停控制按钮（⏮ ⏸/▶ ⏭）
+- 通过 UpdateLayeredWindow 呈现到屏幕
 
-#### 3.4.2 初始化流程
+#### 3.5.2 卡拉 OK 高亮实现（实际方案）
 
-```cpp
-class TaskbarRenderer {
-public:
-    bool Initialize(HWND hwnd);
-    void Resize(UINT width, UINT height, UINT dpi);
-    void Render(const RenderState& state);
-    void Shutdown();
+> 文档规划的 SetDrawingEffect 方案未采用。实际使用 **PushAxisAlignedClip 裁剪方案**：
+> 1. 先绘制整行灰色文字（normalColor）
+> 2. 计算当前进度对应的裁剪宽度（基于单个 textLayout 的 metrics + 居中左边缘偏移）
+> 3. PushAxisAlignedClip 裁剪后绘制高亮色文字（highlightColor）
+> 4. PopAxisAlignedClip 恢复
 
-private:
-    HWND hwnd_;
+此方案修复了居中对齐时高亮区域位置错误的 bug。
 
-    // Direct2D 资源
-    ID2D1Factory* d2d_factory_{nullptr};
-    ID2D1HwndRenderTarget* render_target_{nullptr};
+#### 3.5.3 性能优化
 
-    // DirectWrite 资源
-    IDWriteFactory* dwrite_factory_{nullptr};
-    IDWriteTextFormat* text_format_{nullptr};
+- **按钮文字格式缓存**：`btnFormat_` (IDWriteTextFormat) 作为类成员，Initialize/Resize 时创建一次，不再每帧重复 CreateTextFormat
+- **UI 参数常量化**：所有硬编码数值替换为 constants.h 引用（TEXT_PADDING_X、BUTTON_SPACING 等）
+- **按需渲染**：仅在歌词或进度变化时触发 UpdateLayeredWindow
 
-    // 歌词窗口尺寸
-    UINT width_, height_;
-    UINT dpi_;
-};
-```
+#### 3.5.4 异常恢复
 
-#### 3.4.3 渲染流程
+WM_TIMER 渲染循环中捕获异常后：
+1. 尝试 Shutdown 当前渲染器
+2. 重新 Initialize 渲染器
+3. 如果恢复成功继续运行
+4. 如果彻底失败则 PostQuitMessage 退出程序
 
-```cpp
-void TaskbarRenderer::Render(const RenderState& state) {
-    if (!render_target_) return;
-
-    render_target_->BeginDraw();
-    render_target_->Clear(D2D1::ColorF(0, 0, 0, 0)); // 完全透明背景
-
-    if (!state.currentLine.empty()) {
-        // 绘制卡拉 OK 高亮效果：
-        //   - 前半部分（已唱）: 高亮色 (如 #FF6B81 / 主题红)
-        //   - 后半部分（未唱）: 柔白色 (Alpha 0.6)
-        DrawHighlightLyric(
-            text_format_,
-            state.currentLine,
-            state.progress,
-            D2D1::ColorF(1.0f, 0.42f, 0.50f),   // 高亮色
-            D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.6f) // 柔白色
-        );
-
-        // 如果有翻译文本，在下方以小号字体显示
-        if (!state.currentTranslated.empty()) {
-            DrawTranslatedLyric(state.currentTranslated);
-        }
-    }
-
-    render_target_->EndDraw();
-
-    // 更新 Layered Window
-    UpdateLayeredWindowIndirect();
-}
-```
-
-#### 3.4.4 卡拉 OK 高亮实现
-
-```cpp
-void DrawHighlightLyric(
-    IDWriteTextFormat* format,
-    const std::wstring& text,
-    double progress,                    // 0.0 ~ 1.0
-    D2D1_COLOR_F highlightColor,
-    D2D1_COLOR_F normalColor)
-{
-    // 创建文本布局
-    IDWriteTextLayout* layout = nullptr;
-    dwrite_factory_->CreateTextLayout(
-        text.c_str(), (UINT32)text.length(),
-        format, width_, height_, &layout);
-
-    // 设置前半部分颜色（已唱）- 从头到 progress 百分比
-    DWRITE_TEXT_RANGE highlightRange = { 0, (UINT32)(text.length() * progress) };
-    layout->SetDrawingEffect(&highlightColor, highlightRange);
-
-    // 设置后半部分颜色（未唱）
-    DWRITE_TEXT_RANGE normalRange = {
-        highlightRange.length,
-        (UINT32)(text.length() - highlightRange.length)
-    };
-    layout->SetDrawingEffect(&normalColor, normalRange);
-
-    // 绘制
-    render_target_->DrawTextLayout(
-        D2D1::Point2F(margin_, centerY_),
-        layout,
-        nullptr,  // 使用 layout 自带的颜色
-        D2D1_DRAW_TEXT_OPTIONS_NONE
-    );
-
-    layout->Release();
-}
-```
-
-> **备选方案：** 对于不支持 `SetDrawingEffect` 的场景，可以使用 `DrawText` 分段绘制：先绘制整行灰色文字，再用 `PushAxisAlignedClip` + 高亮色绘制裁剪后的前半部分。
-
-***
-
-### 3.5 配置管理模块
+### 3.6 配置管理模块
 
 **文件：** `src/config.cpp/h`
 
-#### 3.5.1 职责
-
-- 读取/保存用户配置（JSON 文件）
-- 管理启用/禁用状态
-- 管理开机自启动（Windows 注册表 Run key）
-- 提供默认值
-
-#### 3.5.2 配置项
+#### 配置项结构
 
 ```json
 {
   "enabled": true,
   "auto_start": true,
   "appearance": {
-    "highlight_color": "#FF6B81",
-    "normal_color": "#FFFFFF",
-    "normal_opacity": 0.6,
-    "font_family": "Microsoft YaHei UI",
-    "font_size": 14,
+    "highlight_color": "#4CC2FF",
+    "normal_color": "#333333",
+    "normal_opacity": 0.85,
+    "font_family": "华文细黑",
+    "font_size": 20,
     "enable_karaoke": true,
-    "enable_translation": true
+    "enable_translation": true,
+    "enable_marquee": true,
+    "marquee_mode": "bounce",
+    "marquee_delay_ms": 2000,
+    "marquee_pause_ms": 1000,
+    "marquee_speed_px_per_sec": 40
   },
   "advanced": {
     "websocket_port": 6520,
-    "refresh_rate_hz": 30,
+    "refresh_rate_hz": 60,
     "debug_log": false
-  }
+  },
+  "position": { "offset_x": 0, "offset_y": 0 }
 }
 ```
 
-#### 3.5.3 自启动管理
+#### 安全增强
 
-```cpp
-class Config {
-public:
-    void Load();
-    void Save();
+- **范围验证**：Load() 后使用 `std::clamp` 校验所有数值配置项：
+  - `normalOpacity`: [0.0, 1.0]
+  - `fontSize`: [8, 72]
+  - `websocketPort`: [1024, 65535]
+  - `refreshRateHz`: [1, 120]
 
-    bool IsEnabled() const { return enabled_; }
-    void SetEnabled(bool value);
+#### 自启动管理
 
-    bool IsAutoStart() const { return auto_start_; }
-    void SetAutoStart(bool value);
+通过注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\MoeKoeTaskbarLyrics` 管理。包含完整诊断日志输出（RegOpenKeyExW / RegSetValueExW / RegDeleteValueW 各步骤）。
 
-private:
-    bool SetAutoStartRegistry(bool enable);
-    std::string GetConfigPath() const;
-
-    bool enabled_{true};      // 默认启用
-    bool auto_start_{true};   // 默认开机自启
-    // ... 其他配置项
-};
-
-bool Config::SetAutoStartRegistry(bool enable) {
-    HKEY hKey;
-    LONG result = RegOpenKeyEx(
-        HKEY_CURRENT_USER,
-        TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-        0, KEY_SET_VALUE, &hKey
-    );
-    if (result != ERROR_SUCCESS) return false;
-
-    if (enable) {
-        TCHAR exePath[MAX_PATH];
-        GetModuleFileName(nullptr, exePath, MAX_PATH);
-        result = RegSetValueEx(
-            hKey,
-            TEXT("MoeKoeTaskbarLyrics"),
-            0, REG_SZ,
-            (BYTE*)exePath,
-            (DWORD)(_tcslen(exePath) + 1) * sizeof(TCHAR)
-        );
-    } else {
-        RegDeleteValue(hKey, TEXT("MoeKoeTaskbarLyrics"));
-    }
-
-    RegCloseKey(hKey);
-    return true;
-}
-```
-
-#### 3.5.4 配置文件位置
+#### 配置文件路径
 
 ```
 %APPDATA%/MoeKoeTaskbarLyrics/config.json
 ```
 
-***
-
-### 3.6 系统托盘模块
+### 3.7 系统托盘模块
 
 **文件：** `src/tray_icon.cpp/h`
 
-#### 3.6.1 职责
-
-- 在系统托盘区创建图标
-- 提供右键菜单（启用/禁用、开机自启、退出等）
-- 显示歌词提示（鼠标悬停时）
-
-#### 3.6.2 菜单结构
-
-**独立模式：**
+#### 菜单结构（独立模式）
 
 ```
 ┌──────────────────────┐
-│ 🎵 当前歌词...        │  ← 禁用状态，仅显示当前歌词文本
+│ 🎵 当前歌词...        │  ← Tooltip 显示当前歌词（截断至 127 字符）
 ├──────────────────────┤
-│ ✅ 启用歌词显示       │  ← 勾选状态（默认开启）
-│ ✅ 开机自动启动       │  ← 勾选状态（默认开启）
+│ ✅ 启用歌词显示       │  ← ID_MENU_ENABLE
+│ ✅ 开机自动启动       │  ← ID_MENU_AUTOSTART
 ├──────────────────────┤
-│ 重新连接              │
+│ 重新连接              │  ← ID_MENU_RECONNECT
+│ 设置                  │  ← ID_MENU_SETTINGS (WebView2)
 ├──────────────────────┤
-│ 退出                  │
+│ 退出                  │  ← ID_MENU_EXIT
 └──────────────────────┘
 ```
 
-**绑定模式：**
+回调消息号使用 `WM_TRAY_CALLBACK` (0x0600)，定义于 constants.h。
+
+### 3.8 WebView2 设置窗口模块
+
+**文件：** `src/settings_window.cpp/h` + `resources/settings.html`
+
+#### 功能概览
+
+完整的 WebView2 嵌入式设置界面，替代手动编辑 JSON 配置文件和原始 Win32 对话框。
+
+#### 初始化流程
 
 ```
-┌──────────────────────┐
-│ 🔗 已绑定 MoeKoeMusic│  ← 显示绑定状态
-├──────────────────────┤
-│ 🎵 当前歌词...        │
-├──────────────────────┤
-│ ✅ 启用歌词显示       │
-│ ✅ 开机自动启动       │
-├──────────────────────┤
-│ ⏳ 等待 MoeKoeMusic.. │  ← 仅在 MoeKoeMusic 未运行时显示
-├──────────────────────┤
-│ 解除绑定 🔓          │  ← 转为独立模式
-├──────────────────────┤
-│ 退出                  │
-└──────────────────────┘
+CreateWindowEx → WM_NCCREATE(return TRUE)
+  → ICoreWebView2Environment_CreateAsync
+    → ICoreWebView2Controller_CreateAsync
+      → OnControllerReady:
+        → 检查 settings.html 存在性
+        → put_Bounds + put_IsVisible(TRUE)
+        → add_NavigationCompleted → 发送 initConfig
+        → add_WebMessageReceived → 处理 saveConfig/fontSelected
 ```
 
-> 点击"解除绑定"后，插件会删除注册表 Run key，退出当前进程。下次启动时不再检查 MoeKoeMusic 目录。用户如需重新绑定，只需将插件复制回 MoeKoeMusic 目录即可。
+#### 双向通信协议
 
-#### 3.6.3 菜单命令处理
+| 方向 | 消息类型 | 数据 |
+|------|---------|------|
+| C→JS | `initConfig` | 完整配置 JSON |
+| JS→C | `saveConfig` | 用户修改后的完整配置 JSON |
+| JS→C | `fontSelected` | 字体名称（ChooseFontW 选择后） |
 
-```cpp
-void OnTrayMenuCommand(UINT menuId) {
-    switch (menuId) {
-    case ID_MENU_ENABLE: {
-        bool newState = !config_.IsEnabled();
-        config_.SetEnabled(newState);
-        config_.Save();
+#### 关键技术点
 
-        if (!newState) {
-            // 用户禁用 → 退出进程
-            PostQuitMessage(0);
-        }
-        // 用户启用 → 确保歌词窗口已创建
-        break;
-    }
-    case ID_MENU_AUTOSTART: {
-        bool newState = !config_.IsAutoStart();
-        config_.SetAutoStart(newState);
-        config_.Save();
-        break;
-    }
-    case ID_MENU_UNBIND: {
-        // 解除绑定：删除注册表 Run key + 标记配置
-        config_.SetAutoStart(false);
-        config_.SetEnabled(false);
-        config_.Save();
-        // 删除注册表键
-        HKEY hKey;
-        RegOpenKeyEx(HKEY_CURRENT_USER,
-            TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            0, KEY_SET_VALUE, &hKey);
-        RegDeleteValue(hKey, TEXT("MoeKoeTaskbarLyrics"));
-        RegCloseKey(hKey);
-        // 退出进程
-        PostQuitMessage(0);
-        break;
-    }
-    case ID_MENU_RECONNECT: {
-        wsClient_.Disconnect();
-        wsClient_.Connect();
-        break;
-    }
-    case ID_MENU_EXIT: {
-        // 绑定模式下：仅退出进程，下次登录时 Run key 会重启
-        // 独立模式下：正常退出
-        PostQuitMessage(0);
-        break;
-    }
-    }
-}
-```
+- **字体选择无重入**：通过 `PostMessage(hwnd_, WM_PICK_FONT, ...)` 在 WndProc 中调用 ChooseFontW，避免 WebView2 事件处理器中的模态对话框重入问题
+- **UTF-8/UTF-16 转换**：统一使用 `Utf8ToWide()` / `WideToUtf8()` 辅助函数，防止乱码
+- **JSON 类型安全**：settings.html 中对 event.data 做 `typeof === 'string'` 检查后再 JSON.parse
+- **保存即关闭**：saveConfig 成功后自动 Close() 窗口
+- **失败回退**：WebView2 初始化失败时自动回退到 Win32 ConfigDialog
 
-***
-
-### 3.7 进程监控模块
+### 3.9 进程监控模块
 
 **文件：** `src/process_monitor.cpp/h`
 
-#### 3.7.1 职责
+#### 职责
 
-- 检测插件是否处于**绑定模式**（与 `MoeKoeMusic.exe` 在同一目录）
-- 轮询检测 `MoeKoeMusic.exe` 进程的启动和退出
-- 绑定模式下提供"随 MoeKoeMusic 启停"的生命周期管理
+- 轮询检测目标进程（默认 `MoeKoeMusic.exe`）的启动和退出
+- 每 `PROCESS_MONITOR_INTERVAL_MS`(2000ms) 检查一次
+- 通过 `WM_PROCESS_EXITED` (0x0800) 消息通知主窗口
+- 协作式退出：`running_.store(false)` + `join()`
 
-#### 3.7.2 绑定模式检测原理
+#### 当前状态
 
-```
-插件 EXE 目录/
-├── MoeKoeTaskbarLyrics.exe     ← 插件自身
-├── MoeKoeMusic.exe             ← 如果存在 → 绑定模式
-├── ... (其他 MoeKoeMusic 文件)
-```
+模块代码已完成并可编译，但 main.cpp 中的绑定模式分支尚未接入。目前仅支持独立模式。
 
-当插件检测到同目录下存在 `MoeKoeMusic.exe` 时，自动进入**绑定模式**：
-
-- **插件随系统启动**（注册表 Run key），在后台等待 MoeKoeMusic 启动
-- **MoeKoeMusic 启动后** → 插件自动连接并显示歌词
-- **MoeKoeMusic 退出后** → 插件自动退出
-- 下次用户登录时，插件再次通过 Run key 启动，进入等待循环
-
-#### 3.7.3 接口设计
-
-```cpp
-// process_monitor.h
-
-class ProcessMonitor {
-public:
-    ProcessMonitor();
-    ~ProcessMonitor();
-
-    // 检测是否处于绑定模式
-    // 检查同目录下是否存在 MoeKoeMusic.exe
-    static bool IsBoundMode();
-
-    // 开始监控目标进程
-    // onProcessStarted: 目标进程启动时回调
-    // onProcessExited:  目标进程退出时回调
-    void Start(
-        const std::wstring& exeName,
-        std::function<void()> onProcessStarted,
-        std::function<void()> onProcessExited
-    );
-
-    void Stop();
-    bool IsTargetRunning() const;
-
-private:
-    bool CheckProcessRunning();
-    void MonitorLoop();
-
-    std::wstring exe_name_;
-    std::atomic<bool> running_{false};
-    std::atomic<bool> target_running_{false};
-    std::function<void()> on_started_;
-    std::function<void()> on_exited_;
-    std::thread monitor_thread_;
-};
-```
-
-#### 3.7.4 核心实现
-
-```cpp
-bool ProcessMonitor::IsBoundMode() {
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-
-    std::filesystem::path selfPath(exePath);
-    std::filesystem::path targetPath = selfPath.parent_path() / L"MoeKoeMusic.exe";
-
-    return std::filesystem::exists(targetPath);
-}
-
-bool ProcessMonitor::CheckProcessRunning() {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return false;
-
-    PROCESSENTRY32W pe = { sizeof(pe) };
-    bool found = false;
-
-    if (Process32FirstW(snapshot, &pe)) {
-        do {
-            if (_wcsicmp(pe.szExeFile, exe_name_.c_str()) == 0) {
-                found = true;
-                break;
-            }
-        } while (Process32NextW(snapshot, &pe));
-    }
-
-    CloseHandle(snapshot);
-    return found;
-}
-
-void ProcessMonitor::MonitorLoop() {
-    while (running_) {
-        bool currentlyRunning = CheckProcessRunning();
-
-        if (currentlyRunning && !target_running_) {
-            // MoeKoeMusic 刚启动 → 回调
-            target_running_ = true;
-            if (on_started_) on_started_();
-        } else if (!currentlyRunning && target_running_) {
-            // MoeKoeMusic 刚退出 → 回调 → 退出插件
-            target_running_ = false;
-            if (on_exited_) on_exited_();
-        }
-
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
-}
-```
-
-#### 3.7.5 绑定模式 vs 独立模式
-
-| 特性   | 绑定模式                      | 独立模式      |
-| ---- | ------------------------- | --------- |
-| 触发条件 | 插件与 MoeKoeMusic.exe 同目录   | 插件在任意其他目录 |
-| 启动方式 | 注册表 Run key（开机自启）         | 用户手动启动    |
-| 生命周期 | 随 MoeKoeMusic 启停          | 常驻系统托盘    |
-| 进程监控 | 每 2 秒轮询 `MoeKoeMusic.exe` | 不监控       |
-| 退出行为 | MoeKoeMusic 退出 → 插件退出     | 用户点击"退出"  |
-
-***
-
-### 3.8 主程序入口
+### 3.10 主程序入口
 
 **文件：** `src/main.cpp`
 
-```cpp
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nShow) {
-    // 1. 声明 DPI 感知（Per-Monitor V2）
-    SetProcessDpiAwarenessContext(
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#### WinMain 5 阶段初始化
 
-    // 2. 初始化配置 & 检查开关状态
-    Config config;
-    config.Load();
+```
+阶段1: 系统初始化
+  ├── SetProcessDpiAwarenessContext(Per-Monitor V2)
+  ├── CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)
+  └── SetUnhandledExceptionFilter(全局异常过滤器)
 
-    // 3. 检测绑定模式
-    bool isBoundMode = ProcessMonitor::IsBoundMode();
+阶段2: 应用初始化
+  ├── 单实例检查（Named Mutex）
+  ├── Config.Load()
+  ├── [STARTUP] AutoStart 日志
+  └── TrayIcon 初始化
 
-    if (!config.IsEnabled()) {
-        // 用户已禁用 → 仅显示托盘图标，等待用户重新启用
-        TrayIcon tray;
-        tray.Initialize(hInstance);
-        tray.SetMenuCallback([&](UINT id) {
-            if (id == ID_MENU_ENABLE) {
-                config.SetEnabled(true);
-                config.SetAutoStart(true);
-                config.Save();
-                // 需要重启才能生效（简化处理）
-                MessageBox(nullptr,
-                    L"已启用任务栏歌词，请重新启动程序。",
-                    L"MoeKoe Taskbar Lyrics",
-                    MB_OK | MB_ICONINFORMATION);
-                PostQuitMessage(0);
-            }
-        });
-        MSG msg = {};
-        while (GetMessage(&msg, nullptr, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-        return 0;
-    }
+阶段3: 模块初始化
+  ├── TaskbarWindow.Create()
+  ├── Renderer.Initialize()
+  ├── app.renderer = &renderer  ← 必须在 ApplySettings 之前！
+  ├── ApplyRendererSettings(app)
+  ├── WebSocketClient.Connect()
+  └── 回调绑定（歌词/状态/连接/悬停/按钮/配置变更）
 
-    // 4. 注册窗口类
-    RegisterLyricsWindowClass(hInstance);
+阶段4: 消息循环
+  ├── GetMessage / TranslateMessage / DispatchMessage
+  ├── WM_TIMER → Render()
+  │   ├── try { 正常渲染 }
+  │   └── catch → Shutdown + Reinitialize 或 PostQuitMessage
+  ├── WM_RENDER_UPDATE → 立即重绘（悬停变化时）
+  └── WM_TRAY_CALLBACK → 托盘菜单处理
 
-    // 5. 创建系统托盘
-    TrayIcon tray;
-    tray.Initialize(hInstance);
-    tray.SetMenuCallback(OnTrayCommand);
+阶段5: 清理退出
+  ├── wsClient.Disconnect()  ← join() 协作式退出
+  ├── renderer.Shutdown()
+  └── taskbarWindow 销毁
+```
 
-    if (isBoundMode) {
-        // === 绑定模式 ===
-        // 启动进程监控，等待 MoeKoeMusic 启动后再初始化
-        ProcessMonitor monitor;
-        monitor.Start(L"MoeKoeMusic.exe",
-            [&]() {
-                // MoeKoeMusic 启动 → 正式初始化
-                HWND hTaskbar = FindTaskbarHandle();
-                if (!hTaskbar) return;
+#### 消息处理（WndProc）
 
-                TaskbarWindow taskbarWindow;
-                taskbarWindow.Create(hInstance, hTaskbar);
+| 消息 | 处理 |
+|------|------|
+| `WM_TIMER` | 带异常恢复的渲染循环 |
+| `WM_RENDER_UPDATE` (0x0700) | 悬停状态变化立即重绘 |
+| `WM_TRAY_CALLBACK` (0x0600) | 托盘菜单命令分发 |
+| `WM_PROCESS_EXITED` (0x0800) | 绑定模式下目标进程退出 |
+| `WM_PICK_FONT` | ChooseFontW 字体选择（防重入） |
+| `WM_DPICHANGED` | 重新计算 DPI 并调整窗口 |
+| `WM_SETTINGCHANGE` | 任务栏可能变化，重新定位 |
+| `WM_DISPLAYCHANGE` | 分辨率变化，重新定位 |
+| `WM_ACTIVATE` | Z-order 全状态恢复（激活/失活均断言 TOPMOST） |
+| `WM_MOUSEMOVE` | 悬停检测 + TrackMouseEvent |
+| `WM_MOUSELEAVE` | 悬停结束 |
+| `WM_LBUTTONDOWN` | 按钮点击或拖动开始 |
+| `WM_LBUTTONUP` | 拖动结束，保存位置偏移 |
 
-                TaskbarRenderer renderer;
-                renderer.Initialize(taskbarWindow.GetHandle());
+#### Z-order 三重防护机制
 
-                LyricsParser lyricsParser;
-                WebSocketClient wsClient;
-                wsClient.OnLyrics([&](const LyricsData& data) {
-                    lyricsParser.UpdateLyrics(data);
-                });
-                wsClient.OnPlayerState([&](const PlayerState& state) {
-                    lyricsParser.UpdatePlayerState(state);
-                });
-                wsClient.Connect();
+歌词窗口使用 `WS_EX_TOPMOST` 创建，但 Windows 任务栏（`Shell_TrayWnd`）是系统级 TOPMOST 窗口，优先级更高。点击任务栏按钮或展开托盘时，任务栏会提升到歌词窗口上方。为此实现三重防护：
 
-                // 存储全局指针供主循环使用
-                g_taskbarWindow = &taskbarWindow;
-                g_renderer = &renderer;
-                g_lyricsParser = &lyricsParser;
-                g_wsClient = &wsClient;
-            },
-            [&]() {
-                // MoeKoeMusic 退出 → 退出插件
-                PostQuitMessage(0);
-            }
-        );
+| 层级 | 触发时机 | 实现位置 | 说明 |
+|------|---------|---------|------|
+| **① 创建时** | `Create()` | [taskbar_window.cpp](src/taskbar_window.cpp) | `WS_EX_TOPMOST` + `SetWindowPos(HWND_TOPMOST)` 初始置顶 |
+| **② 消息响应** | `WM_ACTIVATE` | [taskbar_window.cpp](src/taskbar_window.cpp) | 无论激活/失活均重新断言 TOPMOST（移除了 WA_INACTIVE 条件判断） |
+| **③ 定期兜底** | 每 ~30 帧 (~0.5s) | [taskbar_window.cpp](src/taskbar_window.cpp) `CheckResize()` | 周期性强制断言 TOPMOST，即使前两层都被绕过也能自动恢复 |
 
-        // 消息循环（绑定模式）
-        MSG msg = {};
-        while (GetMessage(&msg, nullptr, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+### 3.10.2 跑马灯状态机（长歌词滚动）
 
-            if (g_taskbarWindow && msg.message == WM_TIMER) {
-                g_taskbarWindow->CheckResize();
-                auto renderState = g_lyricsParser->GetCurrentRenderState();
-                g_renderer->Render(renderState);
-                tray.UpdateTooltip(renderState.currentLine);
-            }
-        }
+**文件：** `src/renderer.cpp/h`
 
-        // 退出（MoeKoeMusic 已退出）
-        if (g_wsClient) g_wsClient->Disconnect();
-        if (g_renderer) g_renderer->Shutdown();
-        monitor.Stop();
-        return 0;
-    } else {
-        // === 独立模式 ===
-        // 6. 查找任务栏窗口
-        HWND hTaskbar = FindTaskbarHandle();
-        if (!hTaskbar) {
-            MessageBox(nullptr,
-                L"未找到 Windows 任务栏，请确认系统正常运行。",
-                L"MoeKoe Taskbar Lyrics",
-                MB_OK | MB_ICONERROR);
-            return 1;
-        }
+当歌词文本宽度超过可显示区域宽度时，启动跑马灯滚动动画。
 
-        // 7. 在任务栏内创建嵌入歌词窗口
-        TaskbarWindow taskbarWindow;
-        taskbarWindow.Create(hInstance, hTaskbar);
+#### 状态机（6 个状态）
 
-        // 8. 初始化渲染器
-        TaskbarRenderer renderer;
-        renderer.Initialize(taskbarWindow.GetHandle());
+```
+Idle ──(文本超宽)──▶ Delay(2s) ──▶ ScrollLeft ──▶ PauseRight(1s) ──▶ ScrollRight ──▶ PauseLeft(1s) ──▶ Delay ...
+                                        ↑                                    │
+                                        └──── bounce 模式：循环 ─────────────┘
+                                             loop 模式：直接回到 Delay
+```
 
-        // 9. 初始化 WebSocket 客户端
-        LyricsParser lyricsParser;
-        WebSocketClient wsClient;
-        wsClient.OnLyrics([&](const LyricsData& data) {
-            lyricsParser.UpdateLyrics(data);
-        });
-        wsClient.OnPlayerState([&](const PlayerState& state) {
-            lyricsParser.UpdatePlayerState(state);
-        });
-        wsClient.Connect();
+#### 三种模式
 
-        // 10. 消息循环
-        MSG msg = {};
-        while (GetMessage(&msg, nullptr, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+| 模式 | 行为 |
+|------|------|
+| `bounce`（推荐） | 左右往返滚动，阅读体验自然 |
+| `loop` | 传统跑马灯，到左端后跳回右端 |
+| `off` | 关闭滚动，直接截断 |
 
-            // 每帧更新
-            if (msg.message == WM_TIMER) {
-                // 检查任务栏尺寸变化
-                taskbarWindow.CheckResize();
+#### 超长歌词加速
 
-                // 渲染歌词
-                auto renderState = lyricsParser.GetCurrentRenderState();
-                renderer.Render(renderState);
-                tray.UpdateTooltip(renderState.currentLine);
-            }
-        }
+当歌词宽度 > 可用宽度 × 2 时，自动提高滚动速度（最高 3 倍），确保用户在当前歌词结束前能读完。
 
-        // 11. 清理
-        renderer.Shutdown();
-        wsClient.Disconnect();
+#### 高亮跟随滚动
 
-        return 0;
-    }
-}
+跑马灯滚动时，卡拉 OK 高亮的 `clipRect.left` 同步加上 `textLeft_` 偏移量，确保高亮区域始终与可见文字对齐。
 
-// 绑定模式下的全局指针（简化实现）
-// 对于 MVP，这是可接受的方案
-static TaskbarWindow* g_taskbarWindow = nullptr;
-static TaskbarRenderer* g_renderer = nullptr;
-static LyricsParser* g_lyricsParser = nullptr;
-static WebSocketClient* g_wsClient = nullptr;
+### 3.10.3 API 模式自动开启模块
+
+**文件：** `src/api_enabler.cpp/h` （v0.3.1 新增）
+
+#### 职责
+
+检测 MoeKoeMusic 的 API 模式是否开启。若未开启且 MoeKoeMusic 正在运行，则自动修改其 electron-store 配置文件将 `apiMode` 设为 `"on"`，并可选重启 MoeKoeMusic 使配置立即生效。
+
+#### 工作流程
+
+```
+WS 连接失败（第 3 次重试）
+    │
+    ▼
+ApiEnabler::TryEnableApi()
+    │
+    ├─ FindWindowW + CreateToolhelp32Snapshot 双重检测进程
+    │   └─ 不存在 → ProcessNotFound（等待用户启动）
+    │
+    ├─ 定位 %APPDATA%\moekoemusic\config.json
+    │   └─ 不存在 → ConfigNotFound
+    │
+    ├─ JSON 解析 settings.apiMode
+    │   └─ "on" → AlreadyOn
+    │
+    ├─ 写入 .tmp 临时文件 → MoveFileEx 原子替换（防崩溃损坏）
+    │   └─ 失败 → ConfigWriteError
+    │
+    └─ ShellExecuteW 启动新实例（支持 UAC 提权）
+        └─ 成功 → EnabledAndRestarted / 失败 → Enabled（需手动重启）
+```
+
+#### 防重复机制
+
+静态标记 `s_attempted` 确保每个运行周期只尝试一次自动开启，避免频繁读写配置文件和重启主程序。
+
+#### 触发时机
+
+集成在 [websocket_client.cpp](src/websocket_client.cpp) 的 `ReconnectLoop()` 中，当第 3 次连接失败（约已等待 3 秒）时触发，避免首次启动时的正常连接延迟误触。
+
+### 3.11 CMakeLists.txt 构建系统
+
+#### 依赖
+
+| 依赖 | 来源 | 用途 |
+|------|------|------|
+| ixwebsocket | vcpkg | WebSocket 客户端 |
+| nlohmann_json | vcpkg | JSON 解析 |
+| WebView2 | NuGet (`microsoft.web.webview2`) | 设置界面浏览器引擎 |
+| zlib | vcpkg (z.dll) | ixwebsocket 依赖 |
+
+#### 构建后操作
+
+- 复制 `resources/icon.ico` → 输出目录
+- 复制 `resources/settings.html` → 输出目录
+- 复制 `WebView2Loader.dll` → 输出目录
+- 复制 `z.dll` → 输出目录（含 find_library 回退）
+- 编译 `app_icon.rc` → 图标资源嵌入 EXE
+- 编译 `api_enabler.cpp/h` → API 自动开启模块（v0.3.1 新增）
+
+#### 构建命令
+
+```bash
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=[vcpkg]/scripts/buildsystems/vcpkg.cmake
+cmake --build build --config Release
+# 产物: build/Release/MoeKoeTaskbarLyrics.exe
 ```
 
 ***
@@ -1254,93 +636,78 @@ static WebSocketClient* g_wsClient = nullptr;
 
 **地址：** `ws://127.0.0.1:6520`
 
-MoeKoeMusic 在端口 6520 提供 WebSocket 服务（定义于 `electron/services/apiService.js`），采用 JSON 文本帧通信。
-
 #### 服务端推送
 
-**歌词数据：**
+**歌词数据（JSON 数组格式）：**
 
 ```json
-{
-  "type": "lyrics",
-  "data": [
-    {
-      "text": "你好",
-      "translated": "Hello",
-      "characters": [
-        {"char": "你", "startTime": 12345, "endTime": 12678},
-        {"char": "好", "startTime": 12678, "endTime": 13000}
-      ]
-    },
-    {
-      "text": "世界",
-      "translated": "World",
-      "characters": [
-        {"char": "世", "startTime": 14000, "endTime": 14300},
-        {"char": "界", "startTime": 14300, "endTime": 14600}
-      ]
-    }
-  ]
-}
+{"type":"lyrics","data":[{"text":"你好","translated":"Hello","characters":[{"char":"你","startTime":12345,"endTime":12678},{"char":"好","startTime":12678,"endTime":13000}]}]}
 ```
+
+**歌词数据（KRC 字符串格式）：**
+
+MoeKoeMusic 也可能推送 KRC 格式的原始字符串，由 `ParseKrc()` 解析。
 
 **播放器状态：**
 
 ```json
-{
-  "type": "playerState",
-  "data": {
-    "isPlaying": true,
-    "currentTime": 12.5
-  }
-}
+{"type":"playerState","data":{"isPlaying":true,"currentTime":12.5}}
 ```
 
-#### 客户端指令（可选实现）
+#### 客户端指令
 
 ```json
-{"type": "control", "data": {"command": "toggle"}}
-{"type": "control", "data": {"command": "next"}}
-{"type": "control", "data": {"command": "prev"}}
+{"type":"control","data":{"command":"toggle"}}
+{"type":"control","data":{"command":"next"}}
+{"type":"control","data":{"command":"prev"}}
 ```
 
-#### WebSocket 消息处理时序
+#### 安全限制
 
-```
-时间线:
-│
-├─ [连接]    wsClient.Connect("ws://127.0.0.1:6520")
-│            ← 收到 {"type":"welcome", "data":"..."}
-│
-├─ [切歌]    ← 收到 {"type":"lyrics", "data":[...]}
-│            → lyricsParser.UpdateLyrics()
-│            → 重置当前行索引为 0
-│
-├─ [播放中]  ← 收到 {"type":"playerState","data":{"isPlaying":true,"currentTime":12.5}}
-│            → lyricsParser.UpdatePlayerState()
-│            → 渲染线程计算进度并绘制
-│
-├─ [暂停]    ← 收到 {"type":"playerState","data":{"isPlaying":false,"currentTime":30.0}}
-│            → 渲染线程保持当前显示
-│
-├─ [断线]    连接断开
-│            → 启动重连（1s → 2s → 4s → ...）
-│            → 窗口显示 "等待连接..."
-│
-└─ [重连]    连接恢复
-            → 等待新一轮歌词推送
+- 消息大小上限：`MAX_WS_MESSAGE_SIZE` = 1 MB
+- 超限消息被丢弃并记录日志
+
+### 4.2 HTTP 接口（Chrome Extension）
+
+**端口：** 6523
+
+用于 Chrome Extension popup.js 与插件的通信（native_host 桥接）。
+
+### 4.3 WebView2 通信协议
+
+**方向：C++ → JavaScript**
+
+```json
+{"type":"initConfig","data":{/* 完整配置对象 */}}
 ```
 
-#### 数据格式注意事项
+**方向：JavaScript → C++**
 
-| 字段                       | 说明               |
-| ------------------------ | ---------------- |
-| `characters[].startTime` | 单位：**毫秒** (ms)   |
-| `characters[].endTime`   | 单位：**毫秒** (ms)   |
-| `currentTime`            | 单位：**秒** (s)，浮点数 |
-| `text`                   | UTF-8 编码         |
-| `translated`             | UTF-8 编码，可能为空    |
-| 歌词数组为空                   | 表示当前歌曲无歌词        |
+```json
+{"type":"saveConfig","data":{/* 修改后的配置 */}}
+{"type":"fontSelected","data":{"fontFamily":"Segoe UI"}}
+```
+
+### 4.4 字段格式对照
+
+| 字段                       | 类型     | 示例              | 说明        |
+| ------------------------ | ------ | --------------- | --------- |
+| `type`                   | string | `"lyrics"`      | 消息类型      |
+| `data[].text`            | string | `"你好世界"`        | 歌词行文本     |
+| `data[].translated`      | string | `"Hello World"` | 翻译文本      |
+| `data[].characters[].char`   | string | `"你"`           | 单个字符      |
+| `data[].characters[].startTime` | int64  | `12345`         | 开始时间 (ms) |
+| `data[].characters[].endTime`   | int64  | `12678`         | 结束时间 (ms) |
+| `data.isPlaying`          | bool   | `true`          | 播放状态      |
+| `data.currentTime`        | double | `12.5`          | 当前进度 (秒)  |
+
+### 4.5 MoeKoeMusic 端口清单
+
+| 端口   | 用途                           | 协议        |
+| ---- | ---------------------------- | --------- |
+| 6520 | WebSocket 服务（歌词 + 播放状态 + 控制） | WebSocket |
+| 6521 | KuGou Music API（HTTP REST）   | HTTP      |
+| 6523 | 本插件 HTTP 服务（Extension 通信） | HTTP      |
 
 ***
 
@@ -1354,122 +721,35 @@ MoeKoeMusic 在端口 6520 提供 WebSocket 服务（定义于 `electron/service
 | Visual Studio | 2022 (v143 工具集)              |
 | CMake         | 3.20+                        |
 | vcpkg         | 最新版                          |
+| .NET SDK      | 6.0+ （NuGet WebView2 还原需要）    |
 
-### 5.2 依赖管理
+### 5.2 部署流程
 
-使用 vcpkg 管理第三方依赖：
+**当前唯一模式：独立模式**
 
-```bash
-# 安装依赖
-vcpkg install ixwebsocket     # WebSocket 客户端库
-vcpkg install directx-headers # Direct2D 头文件
-vcpkg install nlohmann-json   # JSON 解析（可选，也可手写）
-
-# 将 vcpkg 集成到 CMake
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake
-```
-
-### 5.3 构建脚本
-
-**CMakeLists.txt：**
-
-```cmake
-cmake_minimum_required(VERSION 3.20)
-project(MoeKoeTaskbarLyrics VERSION 0.3.0 LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# 查找依赖
-find_package(ixwebsocket REQUIRED)
-find_package(nlohmann_json REQUIRED)
-
-# Direct2D 是 Windows SDK 的一部分
-# 只需链接 d2d1.lib, dwrite.lib, windowscodecs.lib
-
-# 源文件
-set(SOURCES
-    src/main.cpp
-    src/websocket_client.cpp
-    src/lyrics_parser.cpp
-    src/taskbar_window.cpp
-    src/renderer.cpp
-    src/config.cpp
-    src/process_monitor.cpp
-    src/tray_icon.cpp
-)
-
-# 可执行目标
-add_executable(${PROJECT_NAME} WIN32 ${SOURCES})
-
-target_include_directories(${PROJECT_NAME} PRIVATE src)
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    ixwebsocket::ixwebsocket
-    nlohmann_json::nlohmann_json
-    d2d1.lib
-    dwrite.lib
-    windowscodecs.lib
-    gdi32.lib          # 用于 UpdateLayeredWindow
-    shell32.lib        # 用于 SHAppBarMessage
-    user32.lib
-    comctl32.lib
-    advapi32.lib       # 用于注册表操作
-)
-```
-
-**构建命令：**
-
-```bash
-# 配置
-cmake -B build -S . ^
-    -DCMAKE_TOOLCHAIN_FILE=C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake ^
-    -DCMAKE_BUILD_TYPE=Release
-
-# 编译
-cmake --build build --config Release
-
-# 产物: build/Release/MoeKoeTaskbarLyrics.exe
-# 单文件可执行，无需额外 DLL（静态链接）
-```
-
-### 5.4 部署流程
-
-插件提供两种使用模式，用户可根据需要选择：
-
-**模式 A：绑定模式（推荐）**
-
-1. 用户安装 MoeKoeMusic Windows 版
-2. 将 `MoeKoeTaskbarLyrics.exe` **复制到 MoeKoeMusic 的安装目录**（与 `MoeKoeMusic.exe` 同目录）
-3. 双击运行（首次运行自动注册开机自启 + 绑定状态）
-4. 插件自动在后台等待 MoeKoeMusic 启动
-5. 打开 MoeKoeMusic 播放音乐 → **任务栏内部**显示卡拉 OK 歌词
-6. 关闭 MoeKoeMusic → 插件自动退出
-7. 下次用户登录 → 插件通过 Run key 自动启动，重复步骤 4-6
-
-**模式 B：独立模式**
-
-1. 将 `MoeKoeTaskbarLyrics.exe` 放置到**任意目录**
+1. 将 `MoeKoeTaskbarLyrics.exe` 放置到任意目录
 2. 双击运行，插件以独立模式启动
-3. 常驻系统托盘，手动管理启停
+3. 常驻系统托盘，右键菜单控制启用/禁用/设置/退出
+4. 确保 MoeKoeMusic 已启动并在端口 6520 提供 WebSocket 服务
 
-### 5.5 用户控制
+### 5.3 用户控制
 
 所有控制通过系统托盘右键菜单完成：
 
 | 操作             | 效果                                        |
 | -------------- | ----------------------------------------- |
-| 取消勾选"启用歌词显示"   | 删除注册表 Run key + 写入 `enabled:false` → 进程退出 |
-| 勾选"启用歌词显示"     | 写入 `enabled:true` + 注册表 Run key → 重启后生效   |
-| 取消勾选"开机自动启动"   | 仅删除注册表 Run key，插件仍保持启用                    |
-| 点击"解除绑定"（绑定模式） | 删除注册表 Run key + 写入 `enabled:false` → 进程退出 |
-| 点击"退出"         | 进程退出（绑定模式下下次登录时 Run key 重启）               |
+| 取消勾选"启用歌词显示"   | 写入 `enabled:false`，隐藏歌词窗口（不退出进程）    |
+| 勾选"启用歌词显示"     | 写入 `enabled:true`，显示歌词窗口              |
+| 取消勾选"开机自动启动"   | 删除注册表 Run key                        |
+| 点击"重新连接"       | 断开并重新连接 WebSocket                    |
+| 点击"设置"         | 打开 WebView2 设置窗口（GUI 配置界面）           |
+| 点击"退出"         | 进程退出                                 |
 
-### 5.6 卸载
+### 5.4 卸载
 
-1. 右键托盘图标 → 取消勾选"启用歌词显示"（自动清理注册表）
-2. 右键托盘图标 → 退出
-3. 删除 `MoeKoeTaskbarLyrics.exe` 文件
+1. 右键托盘图标 → 退出
+2. 删除 `MoeKoeTaskbarLyrics.exe` 文件
+3. （可选）删除 `%APPDATA%\MoeKoeTaskbarLyrics\` 配置目录
 
 ***
 
@@ -1482,42 +762,46 @@ cmake --build build --config Release
 | MoeKoeMusic 更新   | 只要 WebSocket 协议不变，插件无需更新                     |
 | WebSocket 协议变化   | 在插件中做 JSON 字段存在性检查                           |
 | 多显示器             | 使用 `MonitorFromWindow` + `GetMonitorInfo` 定位 |
-| 任务栏隐藏/自动隐藏       | 子窗口随任务栏一起隐藏，无需额外处理                           |
-| 任务栏位置变化          | 主动轮询 + `WM_SETTINGCHANGE` 双重检测               |
-| Windows 深色/浅色主题  | 可检测 `UISettings.GetColorValue` 自动适配主题色       |
-| Windows 11 任务栏居中 | `SetParent` 方案兼容居中任务栏                        |
-| 绑定模式安装路径         | 插件只需与 `MoeKoeMusic.exe` 同目录，不影响文件结构          |
-| 绑定模式与独立模式切换      | 通过"解除绑定"菜单项或手动移动 EXE 文件位置                    |
+| 任务栏隐藏/自动隐藏       | WM_SETTINGCHANGE 监听 + 主动轮询 CheckResize()        |
+| 任务栏位置变化          | 主动轮询 + WM_SETTINGCHANGE 双重检测               |
+| Windows 深色/浅色主题  | 可通过设置界面自定义颜色                           |
+| Windows 11 任务栏居中 | 浮动窗口方案天然兼容                              |
 
-### 6.2 潜在风险与缓解
+### 6.2 代码质量措施
 
-| 风险                             | 缓解方案                            |
-| ------------------------------ | ------------------------------- |
-| MoeKoeMusic 关闭后 WebSocket 连接失败 | 优雅显示"等待连接..."，不崩溃               |
-| 歌词数据异常（空字符、超长时间戳）              | 增加数据校验，异常时显示"暂无歌词"              |
-| 高 DPI 下文字渲染模糊                  | 使用 DirectWrite 的 DPI 感知渲染       |
-| GPU 资源泄漏                       | RAII 管理 Direct2D 资源，退出时释放       |
-| 任务栏窗口句柄获取失败                    | 回退为悬浮窗口方案（`SetParent(nullptr)`） |
-| Windows 更新改变任务栏结构              | 主动轮询检测 + 优雅降级                   |
+| 措施                 | 说明                                     |
+| ------------------ | -------------------------------------- |
+| 常量集中管理 (`constants.h`) | 消除魔数，统一修改入口                            |
+| 协作式线程退出            | 所有后台线程移除 TerminateThread，改用 join() + stop flag |
+| WS 消息大小限制           | 1MB 上限防止内存耗尽                            |
+| 配置值范围验证            | std::clamp 校验所有数值配置项                      |
+| WM_TIMER 异常恢复        | 渲染器异常时自动重试，彻底失败则安全退出                   |
+| UTF 编码安全转换          | Utf8ToWide/WideToUtf8 统一处理                    |
+| 编译警告清理             | 修复 C4100/C2374/C4189/C2660 等警告                |
 
 ### 6.3 未来功能扩展
 
-| 功能                           | 难度 | 优先级 |
-| ---------------------------- | -- | --- |
-| 歌词滚动动画（平滑移动）                 | 中  | ⭐⭐⭐ |
-| 双行歌词显示（上一行+当前行）              | 低  | ⭐⭐⭐ |
-| 自定义字体和颜色（配置界面）               | 低  | ⭐⭐  |
-| Chrome Extension 开关 UI（v2.0） | 中  | ⭐⭐  |
-| 歌词搜索（当 WebSocket 无数据时）       | 高  | ⭐   |
-| 绑定模式高级检测（不依赖文件名）             | 中  | ⭐⭐  |
-| 支持其他播放器（Foobar2000 等）        | 高  | ⭐   |
-| 绑定模式自动修复（MoeKoeMusic 路径变更）   | 中  | ⭐   |
+| 功能                           | 难度 | 优先级 | 状态 |
+| ---------------------------- | -- | --- | ---- |
+| 绑定模式接入 main.cpp              | 低  | ⭐⭐  | ⚠️ ProcessMonitor 待接入 |
+| 歌词滚动动画（平滑移动）                 | 中  | ⭐⭐⭐ | ✅ 已完成（跑马灯状态机） |
+| 双行歌词显示（上一行+当前行）              | 低  | ⭐⭐⭐ | ❌ 未实现 |
+| 自定义字体和颜色（配置界面）               | 低  | ⭐⭐  | ✅ 已完成 |
+| Chrome Extension 开关 UI              | 中  | ⭐⭐  | ✅ 已实现 |
+| 歌词搜索（当 WebSocket 无数据时）       | 高  | ⭐   | ❌ 未实现 |
+| 支持其他播放器（Foobar2000 等）        | 高  | ⭐   | ❌ 未实现 |
+| API 模式自动开启                     | 中  | ⭐⭐  | ✅ 已完成（api_enabler 模块） |
+| 硬编码颜色提取到 constants.h           | 低  | ⭐   | 🔜 低优先级 |
+| 统一 logging 系统（合并 DebugLog/ConfigDebugLog） | 低  | ⭐   | 🔜 低优先级 |
 
 ### 6.4 调试与日志
 
-- 使用 `OutputDebugString` 输出调试信息
-- 日志文件位置：`%TEMP%\MoeKoeTaskbarLyrics\debug.log`
+- 使用项目内部 `DebugLog()` 函数输出调试信息
+- 日志文件位置：exe 同目录下 `debug.log`（可移植，不依赖 %TEMP%）
 - 可通过配置 `"debug_log": true` 启用详细日志
+- 配置模块使用独立的 `ConfigDebugLog()` 函数
+- 启动时输出 `[STARTUP] AutoStart=%s` 诊断信息
+- 自启注册表操作有完整的步骤诊断日志
 
 ***
 
@@ -1533,32 +817,22 @@ cmake --build build --config Release
 | Direct2D 官方教程         | <https://learn.microsoft.com/en-us/windows/win32/direct2d/direct2d-tutorial>                                |
 | DirectWrite 文字渲染      | <https://learn.microsoft.com/en-us/windows/win32/directwrite/text-formatting-and-layout>                    |
 | High DPI 桌面应用         | <https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows> |
-| SHAppBarMessage       | <https://learn.microsoft.com/en-us/windows/win32/shell/abm-gettaskbarpos>                                   |
+| WebView2 官方文档        | <https://learn.microsoft.com/en-us/microsoft-edge/webview2/>                                                |
 | ixwebsocket           | <https://github.com/machinezone/IXWebSocket>                                                                |
-| Taskbar-Lyrics 参考项目   | <https://gitcode.com/gh_mirrors/ta/Taskbar-Lyrics>                                                          |
+| nlohmann/json         | <https://github.com/nlohmann/json>                                                                          |
 
-### 7.2 字段格式对照
+### 7.2 代码审查
 
-| WebSocket JSON 字段               | 类型     | 示例              | 说明        |
-| ------------------------------- | ------ | --------------- | --------- |
-| `type`                          | string | `"lyrics"`      | 消息类型      |
-| `data[].text`                   | string | `"你好世界"`        | 歌词行文本     |
-| `data[].translated`             | string | `"Hello World"` | 翻译文本      |
-| `data[].characters[].char`      | string | `"你"`           | 单个字符      |
-| `data[].characters[].startTime` | int64  | `12345`         | 开始时间 (ms) |
-| `data[].characters[].endTime`   | int64  | `12678`         | 结束时间 (ms) |
-| `data.isPlaying`                | bool   | `true`          | 播放状态      |
-| `data.currentTime`              | double | `12.5`          | 当前进度 (秒)  |
+项目经过两轮代码审查：
 
-### 7.3 MoeKoeMusic 端口清单
+| 报告 | 内容 |
+|------|------|
+| `代码审查报告.md` | 基础审查：常量提取、注释规范、日志路径等 |
+| `代码审查报告_进阶版.md` | 深度审查（评分 7.8/10）：TerminateThread 安全、WS 大小检查、按钮格式缓存、配置验证、异常恢复等 |
 
-| 端口   | 用途                           | 协议        |
-| ---- | ---------------------------- | --------- |
-| 6520 | WebSocket 服务（歌词 + 播放状态 + 控制） | WebSocket |
-| 6521 | KuGou Music API（HTTP REST）   | HTTP      |
+高/中优先级建议已全部修复完成。
 
 ***
 
 > **本文档为开发草案，将在实现过程中持续更新。**\
 > 如有疑问，请参考 MoeKoeMusic 源码仓库或提交 Issue 讨论。
-

@@ -262,6 +262,17 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
 
 void TaskbarWindow::CheckResize() {
     if (!hTaskbar_) return;
+
+    // 定期强制恢复 TOPMOST Z-order
+    // 任务栏(Shell_TrayWnd)是系统级 TOPMOST 窗口，点击任务栏按钮/展开托盘时
+    // Windows 会将其提升到普通 TOPMOST 窗口之上，仅靠 WM_ACTIVATE 恢复存在时序竞争
+    ++topmostFrameCounter_;
+    if (topmostFrameCounter_ >= kTopmostRestoreInterval) {
+        topmostFrameCounter_ = 0;
+        ::SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+
     RECT tb{};
     ::GetWindowRect(hTaskbar_, &tb);
     if (!::EqualRect(&tb, &lastTaskbarRect_)) {
@@ -435,11 +446,10 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         return 0;
     }
     case WM_ACTIVATE: {
-        // 保持 TOPMOST：防止被其他窗口（包括任务栏）覆盖
-        if (LOWORD(wParam) != WA_INACTIVE) {
-            ::SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        }
+        // 始终恢复 TOPMOST：点击任务栏/托盘时窗口会收到 WA_INACTIVE
+        // 若不恢复，任务栏等系统窗口可能将歌词窗口覆盖到下方
+        ::SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         return 0;
     }
     case WM_DPICHANGED: {

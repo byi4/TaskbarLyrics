@@ -1,6 +1,6 @@
 # MoeKoeMusic Taskbar Lyrics
 
->  Windows 任务栏的歌词显示插件（v0.3.0）
+>  Windows 任务栏的歌词显示插件（v0.3.1）
 
 ## 项目简介
 
@@ -138,7 +138,7 @@ cmake --build build --config x64-Debug
 
 在 MoeKoeMusic 的插件页面点击 popup 启动。
 
-## 当前状态 (v0.3.0)
+## 当前状态 (v0.3.1)
 
 ### 已完成
 
@@ -152,7 +152,10 @@ cmake --build build --config x64-Debug
 - [x] 6 种预设主题色
 - [x] HTTP 接口（ping/shutdown）
 - [x] 插件 popup 启动/停止
-- [x] Z-order 保持（防止被任务栏覆盖）
+- [x] Z-order 三重防护（防止被任务栏覆盖）
+- [x] 长歌词跑马灯滚动（bounce/loop/off 三种模式）
+- [x] API 模式自动检测与开启（连接失败时自动开启 MoeKoeMusic 的 WS 服务）
+- [x] 刷新率最高 120 FPS
 
 ### 待改进
 

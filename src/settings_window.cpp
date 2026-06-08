@@ -541,6 +541,16 @@ void SettingsWindow::ApplyConfigFromJson(void* jsonPtr) {
             a.value("enable_karaoke", currentConfig_.Appearance().enableKaraoke);
         currentConfig_.MutableAppearance().enableTranslation =
             a.value("enable_translation", currentConfig_.Appearance().enableTranslation);
+        currentConfig_.MutableAppearance().enableMarquee =
+            a.value("enable_marquee", currentConfig_.Appearance().enableMarquee);
+        currentConfig_.MutableAppearance().marqueeMode =
+            a.value("marquee_mode", currentConfig_.Appearance().marqueeMode);
+        currentConfig_.MutableAppearance().marqueeDelayMs =
+            a.value("marquee_delay_ms", currentConfig_.Appearance().marqueeDelayMs);
+        currentConfig_.MutableAppearance().marqueePauseMs =
+            a.value("marquee_pause_ms", currentConfig_.Appearance().marqueePauseMs);
+        currentConfig_.MutableAppearance().marqueeSpeedPxPerSec =
+            static_cast<float>(a.value("marquee_speed_px_per_sec", static_cast<double>(currentConfig_.Appearance().marqueeSpeedPxPerSec)));
     }
     if (c.contains("position")) {
         const auto& p = c["position"];
@@ -572,6 +582,11 @@ void SettingsWindow::SendConfigToWebView(const Config& cfg) {
             {"normal_opacity", cfg.Appearance().normalOpacity},
             {"enable_karaoke", cfg.Appearance().enableKaraoke},
             {"enable_translation", cfg.Appearance().enableTranslation},
+            {"enable_marquee", cfg.Appearance().enableMarquee},
+            {"marquee_mode", cfg.Appearance().marqueeMode},
+            {"marquee_delay_ms", cfg.Appearance().marqueeDelayMs},
+            {"marquee_pause_ms", cfg.Appearance().marqueePauseMs},
+            {"marquee_speed_px_per_sec", cfg.Appearance().marqueeSpeedPxPerSec},
         }},
         {"position", {
             {"offset_x", cfg.Position().offsetX},

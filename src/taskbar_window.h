@@ -114,6 +114,12 @@ private:
 
     ButtonCallback onButtonClicked_;
     HoverChangedCallback onHoverChanged_;
+
+    // Z-order 恢复: 每 kTopmostRestoreInterval 帧强制断言一次 HWND_TOPMOST
+    // 原因: 任务栏(Shell_TrayWnd)也是系统级 TOPMOST 窗口，点击任务栏/展开托盘时
+    //       Windows 会将任务栏提升到普通 TOPMOST 窗口之上，需定期恢复
+    static constexpr int kTopmostRestoreInterval = 30;  // 约 0.5 秒 @60fps
+    int           topmostFrameCounter_{0};
 };
 
 } // namespace moekoe

@@ -19,10 +19,17 @@ struct RendererSettings {
     std::string highlightColor{"#4CC2FF"};
     std::string normalColor{"#333333"};
     float       normalOpacity{0.85f};
-    std::string fontFamily{"Microsoft YaHei UI"};
-    int         fontSize{14};
+    std::string fontFamily{"华文细黑"};
+    int         fontSize{20};
     bool        enableKaraoke{true};
     bool        enableTranslation{true};
+
+    // 跑马灯（长歌词滚动）配置
+    bool        enableMarquee{true};
+    std::string marqueeMode{"bounce"};         // bounce / loop / off
+    int         marqueeDelayMs{2000};
+    int         marqueePauseMs{1000};
+    float       marqueeSpeedPxPerSec{40.0f};
 };
 
 class TaskbarRenderer {
@@ -43,13 +50,42 @@ private:
     void CreateRenderTarget();
     void DrawHighlightedTextPerCharacter(const std::wstring& text,
                                           double progress,
-                                          bool enableKaraoke);
+                                          bool enableKaraoke,
+                                          float scrollOffset = 0.0f);
     void DrawTranslatedText(const std::wstring& text);
     void DrawCentered(const std::wstring& text, ID2D1Brush* brush, float yOffset);
     void DrawHoverControls(bool isPlaying);
     void PresentToLayeredWindow();
 
     static D2D1_COLOR_F ParseColor(const std::string& hex, float alpha = 1.0f);
+
+    // ═══════════════════════════════
+    // 跑马灯（长歌词滚动）状态机
+    // ═══════════════════════════════
+
+    /// 跑马灯滚动模式
+    enum class MarqueeMode {
+        Bounce,   // 左右往返滚动（推荐）
+        Loop,     // 传统跑马灯循环
+        Off,      // 关闭跑马灯，直接截断
+    };
+
+    /// 跑马灯内部状态
+    enum class MarqueeState {
+        Idle,        // 不需要滚动（短文本 / 跑马灯关闭）
+        Delay,       // 延迟等待（歌词刚显示）
+        ScrollLeft,  // 向左滚动中
+        PauseRight,  // 右端点暂停（仅 bounce 模式）
+        ScrollRight, // 向右滚回（仅 bounce 模式）
+        PauseLeft,   // 左端点暂停 → 回到 Delay（仅 bounce 模式）
+    };
+
+    /// 将字符串转换为 MarqueeMode
+    static MarqueeMode ParseMarqueeMode(const std::string& mode);
+
+    /// 更新跑马灯状态机，返回当前应使用的水平滚动偏移量（像素）
+    /// needRedraw: 输出参数，表示是否因为滚动动画需要重绘
+    float UpdateMarquee(const std::string& lyricText, bool& needRedraw);
 
     HWND hwnd_{nullptr};
     UINT width_{0};
@@ -65,6 +101,7 @@ private:
     Microsoft::WRL::ComPtr<IDWriteFactory>       dwriteFactory_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat>    textFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat>    translationFormat_;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat>    btnFormat_;          // 控制按钮图标文字格式（缓存）
 
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> highlightBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> normalBrush_;
@@ -73,6 +110,17 @@ private:
     RenderState lastState_;
 
     RendererSettings settings_;
+
+    // ═══════════════════════════════
+    // 跑马灯状态机成员
+    // ═══════════════════════════════
+
+    MarqueeState   marqueeState_{MarqueeState::Idle};
+    float          scrollOffset_{0.0f};           // 当前水平滚动偏移（像素，正值=文本左移）
+    double         stateStartTime_{0.0};          // 当前状态开始时间（QueryPerformanceCounter 秒）
+    std::string    marqueeLastText_;              // 上一次的歌词文本（用于检测歌词切换）
+    float          marqueeTextWidth_{0.0f};       // 当前歌词文本的像素宽度（缓存）
+    float          marqueeMaxOffset_{0.0f};       // 最大可滚动偏移量 = textWidth - availableWidth
 };
 
 } // namespace moekoe

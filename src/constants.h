@@ -97,6 +97,22 @@ constexpr float BUTTON_BG_PADDING_Y = 2.0f;
 constexpr float BUTTON_BG_BORDER_RADIUS = 3.0f;
 
 // ═══════════════════════════════════════
+// 跑马灯（长歌词滚动）常量
+// ═══════════════════════════════════════
+
+/// 跑马灯默认延迟时间（毫秒）：歌词显示后多久开始滚动
+constexpr int MARQUEE_DEFAULT_DELAY_MS = 2000;
+
+/// 跑马灯默认端点暂停时间（毫秒）
+constexpr int MARQUEE_DEFAULT_PAUSE_MS = 1000;
+
+/// 跑马灯默认滚动速度（像素/秒）
+constexpr float MARQUEE_DEFAULT_SPEED_PX_PER_SEC = 40.0f;
+
+/// 超长歌词判定阈值：文本宽度 > 可用宽度 × 此倍数时自动加速
+constexpr float MARQUEE_SPEEDUP_THRESHOLD = 2.0f;
+
+// ═══════════════════════════════════════
 // Windows 系统限制
 // ═══════════════════════════════════════
 
@@ -136,6 +152,11 @@ constexpr int MAX_RECONNECT_ATTEMPTS = 5;
 /// 单次连接超时：迭代次数 × 100ms = 总毫秒数
 /// 例如 50 次 × 100ms = 5 秒连接窗口
 constexpr int WS_CONNECT_TIMEOUT_ITERATIONS = 50;
+
+/// WebSocket 消息最大允许大小（字节）
+/// 超过此大小的消息将被丢弃，防止内存耗尽攻击
+/// 正常歌词 JSON 数据通常 < 100KB
+constexpr size_t MAX_WS_MESSAGE_SIZE = 1024 * 1024; // 1 MB
 
 // ═══════════════════════════════════════
 // 线程退出超时

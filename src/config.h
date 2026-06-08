@@ -16,15 +16,22 @@ struct AppearanceConfig {
     std::string highlightColor{"#4CC2FF"};
     std::string normalColor{"#333333"};
     double      normalOpacity{0.85};
-    std::string fontFamily{"Microsoft YaHei UI"};
-    int         fontSize{14};
+    std::string fontFamily{"华文细黑"};
+    int         fontSize{20};
     bool        enableKaraoke{true};
     bool        enableTranslation{true};
+
+    // 跑马灯（长歌词滚动）配置
+    bool        enableMarquee{true};           // 是否启用跑马灯
+    std::string marqueeMode{"bounce"};        // bounce=往返 / loop=循环 / off=关闭
+    int         marqueeDelayMs{2000};          // 歌词显示后延迟多久开始滚动（毫秒）
+    int         marqueePauseMs{1000};          // 滚动到端点后暂停时间（毫秒）
+    float       marqueeSpeedPxPerSec{40.0f};   // 滚动速度（像素/秒）
 };
 
 struct AdvancedConfig {
     int  websocketPort{6520};
-    int  refreshRateHz{30};
+    int  refreshRateHz{60};
     bool debugLog{false};
 };
 

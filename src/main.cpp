@@ -97,6 +97,11 @@ void ApplyRendererSettings(AppContext& app) {
     rs.fontSize          = app.config->Appearance().fontSize;
     rs.enableKaraoke     = app.config->Appearance().enableKaraoke;
     rs.enableTranslation = app.config->Appearance().enableTranslation;
+    rs.enableMarquee     = app.config->Appearance().enableMarquee;
+    rs.marqueeMode       = app.config->Appearance().marqueeMode;
+    rs.marqueeDelayMs    = app.config->Appearance().marqueeDelayMs;
+    rs.marqueePauseMs    = app.config->Appearance().marqueePauseMs;
+    rs.marqueeSpeedPxPerSec = app.config->Appearance().marqueeSpeedPxPerSec;
 
     DebugLog("[CONFIG] ApplyRenderer: hl=%s nl=%s font=%s size=%d opacity=%.2f\n",
         rs.highlightColor.c_str(), rs.normalColor.c_str(),
@@ -354,6 +359,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     config.Load();
     DebugLog("[STARTUP] Config loaded\n");
     config.SetAutoStart(config.IsAutoStart());  // 同步开机自启注册表
+    DebugLog("[STARTUP] AutoStart=%s\n", config.IsAutoStart() ? "ON" : "OFF");
 
     if (!RegisterMessageClass(hInstance)) {
         std::fprintf(stderr, "[Error] RegisterClassExW failed\n");
@@ -466,7 +472,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         if (app.taskbarWindow && data.valid) {
             HWND h = taskbarWindow.GetHandle();
             ::ShowWindow(h, SW_SHOWNA);
-            ::SetWindowPos(h, HWND_TOP, 0, 0, 0, 0,
+            ::SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         }
     });

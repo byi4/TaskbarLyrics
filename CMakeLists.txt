@@ -130,6 +130,7 @@ set(SOURCES
     src/tray_icon.cpp
     src/process_monitor.cpp
     src/config_dialog.cpp
+    src/api_enabler.cpp
     src/app_icon.rc
 )
 
@@ -146,6 +147,7 @@ set(HEADERS
     src/tray_icon.h
     src/process_monitor.h
     src/config_dialog.h
+    src/api_enabler.h
 )
 
 # 可执行目标
@@ -196,14 +198,6 @@ if(MSVC)
                 $<TARGET_FILE_DIR:${PROJECT_NAME}>/resources
             COMMENT "Copying resources to output directory")
     endif()
-
-    # 复制 EXE 到 MoeKoeMusic 插件目录
-    set(PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:${PROJECT_NAME}>
-            "${PLUGIN_DIR}/MoeKoeTaskbarLyrics.exe"
-        COMMENT "Copying EXE to MoeKoeMusic plugin directory")
 
     # 复制运行时 DLL 到输出目录
     # 1) WebView2Loader.dll（WebView2 运行时依赖）
