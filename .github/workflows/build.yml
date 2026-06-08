@@ -33,14 +33,16 @@ jobs:
       - name: Install vcpkg dependencies
         run: |
           $env:VCPKG_ROOT="${{ github.workspace }}\vcpkg"
-          & "${env:VCPKG_ROOT}\vcpkg.exe" install --triplet x64-windows ixwebsocket nlohmann-json zlib mbedtls
+          & "${env:VCPKG_ROOT}\vcpkg.exe" install `
+            --triplet x64-windows `
+            --x-install-root="${{ github.workspace }}\vcpkg_installed" `
+            ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
-          $vcpkgDir = "${{ github.workspace }}\vcpkg_installed\x64-windows"
           cmake -B build -S . `
             "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_INSTALLED_DIR="$vcpkgDir" `
+            "-DVCPKG_INSTALLED_DIR=${{ github.workspace }}\vcpkg_installed\x64-windows" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
