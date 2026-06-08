@@ -33,8 +33,7 @@ jobs:
       - name: Install vcpkg dependencies
         run: |
           $env:VCPKG_ROOT="${{ github.workspace }}\vcpkg"
-          $VCPKG\vcpkg.exe install --triplet x64-windows `
-            ixwebsocket nlohmann-json zlib mbedtls
+          & "${env:VCPKG_ROOT}\vcpkg.exe" install --triplet x64-windows ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
