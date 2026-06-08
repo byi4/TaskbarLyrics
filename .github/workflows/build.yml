@@ -46,7 +46,7 @@ jobs:
           $env:VCPKG_ROOT = ""
           cd vcpkg
           $vcpkgRoot = (Get-Location).Path
-          .\vcpkg.exe install --triplet x64-windows --vcpkg-root="$vcpkgRoot" ixwebsocket nlohmann-json zlib mbedtls
+          .\vcpkg.exe install --triplet x64-windows --vcpkg-root="$vcpkgRoot"
 
       - name: Configure CMake
         shell: powershell
