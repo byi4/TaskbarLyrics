@@ -24,6 +24,40 @@ static std::string WideToUtf8(const std::wstring& ws) {
     return s;
 }
 
+// ── 智能选择自启 exe 路径 ──
+// 优先使用 MoeKoeMusic 实际加载的最终路径（moeKoe-taskbar-lyrics 下的 exe），
+// 而非当前进程的临时路径（如 VS 调试器路径）。
+// 这样无论从哪个目录启动 EXE，注册表/schtasks/启动文件夹写入的都是正确路径。
+static std::wstring ResolveAutoStartExePath() {
+    wchar_t currentPath[MAX_PATH] = {0};
+    ::GetModuleFileNameW(nullptr, currentPath, MAX_PATH);
+
+    // 当前路径
+    std::wstring cur(currentPath);
+    // 当前路径的目录
+    std::wstring curDir = cur;
+    size_t pos = curDir.find_last_of(L'\\');
+    if (pos != std::wstring::npos) curDir = curDir.substr(0, pos);
+
+    // 备选1：当前目录的父目录下找 "moeKoe-taskbar-lyrics\MoeKoeTaskbarLyrics.exe"
+    if (pos != std::wstring::npos) {
+        std::wstring parentDir = curDir;
+        size_t p2 = parentDir.find_last_of(L'\\');
+        if (p2 != std::wstring::npos) parentDir = parentDir.substr(0, p2);
+        std::wstring candidate = parentDir + L"\\moeKoe-taskbar-lyrics\\MoeKoeTaskbarLyrics.exe";
+        if (::GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            // 找到了——这就是生产路径
+            // 但只有当当前路径不在 moeKoe-taskbar-lyrics 下时才覆盖
+            if (curDir.find(L"moeKoe-taskbar-lyrics") == std::wstring::npos) {
+                return candidate;
+            }
+        }
+    }
+
+    // 备选2：当前路径
+    return cur;
+}
+
 namespace {
 
 void ConfigDebugLog(const char* fmt, ...) {
@@ -169,9 +203,32 @@ bool Config::Save() const {
     return true;
 }
 
-void Config::SetAutoStart(bool v) {
+bool Config::SetAutoStart(bool v) {
+    const bool changed = (autoStart_ != v);
     autoStart_ = v;
-    SetAutoStartRegistry(v);
+
+    // 多方案级联：注册表 → 任务计划程序 → 启动文件夹
+    // 只要其中一个成功就算成功
+    bool regOk = SetAutoStartRegistry(v);
+    bool taskOk = false;
+    bool startupOk = false;
+    if (!regOk) {
+        // 注册表失败（很可能是杀毒软件拦截）→ 试任务计划程序
+        taskOk = SetAutoStartTaskScheduler(v);
+        if (!taskOk) {
+            // 还是失败 → 试启动文件夹
+            startupOk = SetAutoStartStartupFolder(v);
+        }
+    }
+
+    const bool anyOk = regOk || taskOk || startupOk;
+    ConfigDebugLog("[AUTOSTART] SetAutoStart(%s) changed=%d, reg=%s task=%s startup=%s -> overall=%s\n",
+        v ? "true" : "false", (int)changed,
+        regOk ? "ok" : "FAIL",
+        taskOk ? "ok" : (regOk ? "skip" : "FAIL"),
+        startupOk ? "ok" : ((regOk || taskOk) ? "skip" : "FAIL"),
+        anyOk ? "OK" : "ALL-FAIL");
+    return anyOk;
 }
 
 bool Config::SetAutoStartRegistry(bool enable) {
@@ -189,25 +246,40 @@ bool Config::SetAutoStartRegistry(bool enable) {
 
     bool ok = true;
     if (enable) {
+        // 使用智能解析的路径（优先 moeKoe-taskbar-lyrics 下的 exe）
+        const std::wstring resolvedPath = ResolveAutoStartExePath();
+        // 复制到 wchar_t 数组（GetModuleFileNameW 风格的接口）
         wchar_t exePath[MAX_PATH] = {0};
-        DWORD pathLen = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
+
+        if (resolvedPath.empty() || wcslen(exePath) == 0) {
+            ConfigDebugLog("[AUTOSTART] GetModuleFileNameW failed: %lu\n", GetLastError());
+            RegCloseKey(hKey);
+            return false;
+        }
+
+        // 用引号包围路径，避开路径中可能存在的空格
+        std::wstring quotedPath = L"\"";
+        quotedPath += exePath;
+        quotedPath += L"\"";
 
         const std::string nameKey = GetAutoStartRegistryKey();
         const std::wstring nameW(nameKey.begin(), nameKey.end());
-        const DWORD byteCount = static_cast<DWORD>((wcslen(exePath) + 1) * sizeof(wchar_t));
+        const DWORD byteCount = static_cast<DWORD>((quotedPath.size() + 1) * sizeof(wchar_t));
 
         result = RegSetValueExW(
             hKey,
             nameW.c_str(),
             0,
             REG_SZ,
-            reinterpret_cast<const BYTE*>(exePath),
+            reinterpret_cast<const BYTE*>(quotedPath.c_str()),
             byteCount);
         if (result != ERROR_SUCCESS) {
             ConfigDebugLog("[AUTOSTART] RegSetValueExW failed: %ld\n", result);
             ok = false;
         } else {
-            ConfigDebugLog("[AUTOSTART] Registry set: key=%s path=%s\n", nameKey.c_str(), WideToUtf8(exePath).c_str());
+            ConfigDebugLog("[AUTOSTART] Registry SET ok: key='%s' value='%s'\n",
+                nameKey.c_str(), WideToUtf8(quotedPath).c_str());
         }
     } else {
         const std::string nameKey = GetAutoStartRegistryKey();
@@ -217,12 +289,150 @@ bool Config::SetAutoStartRegistry(bool enable) {
             ConfigDebugLog("[AUTOSTART] RegDeleteValueW failed: %ld\n", result);
             ok = false;
         } else {
-            ConfigDebugLog("[AUTOSTART] Registry removed: key=%s\n", nameKey.c_str());
+            ConfigDebugLog("[AUTOSTART] Registry DELETE ok: key='%s' (ret=%ld)\n",
+                nameKey.c_str(), result);
         }
     }
 
     RegCloseKey(hKey);
     return ok;
+}
+
+// ─────────── 任务计划程序自启（最稳） ───────────
+//
+// 优先使用 schtasks 命令创建/删除"用户登录时启动"的任务。
+// 大部分杀毒软件不会拦截 schtasks，且无需管理员权限（HKCU 范围）。
+// 任务名: MoeKoeTaskbarLyrics_AutoStart
+//
+static const wchar_t* kTaskName = L"MoeKoeTaskbarLyrics_AutoStart";
+
+bool Config::SetAutoStartTaskScheduler(bool enable) {
+    const std::wstring resolvedPath = ResolveAutoStartExePath();
+    wchar_t exePath[MAX_PATH] = {0};
+    wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
+    if (resolvedPath.empty() || wcslen(exePath) == 0) {
+        ConfigDebugLog("[AUTOSTART] TaskScheduler: path empty\n");
+        return false;
+    }
+
+    // 先删除旧任务（无论存在与否都先尝试，避免冲突）
+    std::wstring deleteCmd = std::wstring(L"schtasks /Delete /TN \"") + kTaskName + L"\" /F";
+    {
+        STARTUPINFOW si{}; si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        std::wstring deleteCmdLine = deleteCmd;
+        if (::CreateProcessW(nullptr, deleteCmdLine.data(), nullptr, nullptr,
+                             FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            ::WaitForSingleObject(pi.hProcess, 5000);
+            ::CloseHandle(pi.hProcess);
+            ::CloseHandle(pi.hThread);
+        }
+    }
+
+    if (!enable) {
+        // 关闭自启：只要成功删除了"任务"就算成功（如果原本就不存在也算 ok）
+        // 简化处理：直接返回 true
+        ConfigDebugLog("[AUTOSTART] TaskScheduler: task deleted (or never existed)\n");
+        return true;
+    }
+
+    // 创建任务: /SC ONLOGON 触发，/RL LIMITED 普通权限，/F 覆盖
+    std::wstring quotedExe = L"\"";
+    quotedExe += exePath;
+    quotedExe += L"\"";
+
+    std::wstring createCmd = std::wstring(L"schtasks /Create /TN \"") + kTaskName
+        + L"\" /TR " + quotedExe
+        + L" /SC ONLOGON /RL LIMITED /F";
+
+    ConfigDebugLog("[AUTOSTART] TaskScheduler cmd: %s\n",
+        WideToUtf8(createCmd).c_str());
+
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::wstring cmdLine = createCmd;
+    if (!::CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr,
+                          FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        ConfigDebugLog("[AUTOSTART] TaskScheduler CreateProcessW failed: %lu\n", GetLastError());
+        return false;
+    }
+    ::WaitForSingleObject(pi.hProcess, 10000);
+    DWORD exitCode = 0;
+    ::GetExitCodeProcess(pi.hProcess, &exitCode);
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
+
+    if (exitCode != 0) {
+        ConfigDebugLog("[AUTOSTART] TaskScheduler schtasks exited with code %lu\n", exitCode);
+        return false;
+    }
+
+    ConfigDebugLog("[AUTOSTART] TaskScheduler: task created successfully\n");
+    return true;
+}
+
+// ─────────── 启动文件夹快捷方式自启（最简） ───────────
+//
+// 在 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup 下放置 .lnk 快捷方式。
+// 缺点是依赖 IShellLink COM 接口，代码量大；这里用 PowerShell 脚本兜底。
+//
+bool Config::SetAutoStartStartupFolder(bool enable) {
+    const std::wstring resolvedPath = ResolveAutoStartExePath();
+    wchar_t exePath[MAX_PATH] = {0};
+    wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
+    if (resolvedPath.empty() || wcslen(exePath) == 0) {
+        return false;
+    }
+
+    // Startup 目录
+    wchar_t startupDir[MAX_PATH] = {0};
+    if (FAILED(::SHGetFolderPathW(nullptr, CSIDL_STARTUP, nullptr, 0, startupDir))) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: SHGetFolderPathW failed\n");
+        return false;
+    }
+
+    std::wstring lnkPath = std::wstring(startupDir) + L"\\MoeKoeTaskbarLyrics.lnk";
+
+    if (!enable) {
+        if (::DeleteFileW(lnkPath.c_str())) {
+            ConfigDebugLog("[AUTOSTART] StartupFolder: lnk deleted\n");
+        }
+        return true;  // 不存在也视为成功
+    }
+
+    // 用 PowerShell 创建快捷方式
+    std::wstring psScript = L"powershell -NoProfile -WindowStyle Hidden -Command \"";
+    psScript += L"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('";
+    psScript += lnkPath;
+    psScript += L"'); $s.TargetPath = '";
+    psScript += exePath;
+    psScript += L"'; $s.WorkingDirectory = '";
+    wchar_t workDir[MAX_PATH] = {0};
+    wcsncpy_s(workDir, exePath, MAX_PATH);
+    wchar_t* lastSlash = wcsrchr(workDir, L'\\');
+    if (lastSlash) *lastSlash = L'\0';
+    psScript += workDir;
+    psScript += L"'; $s.WindowStyle = 7; $s.Save()\"";
+
+    ConfigDebugLog("[AUTOSTART] StartupFolder ps (truncated)\n");
+
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::wstring cmdLine = psScript;
+    if (!::CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr,
+                          FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder CreateProcessW failed: %lu\n", GetLastError());
+        return false;
+    }
+    ::WaitForSingleObject(pi.hProcess, 15000);
+    DWORD exitCode = 0;
+    ::GetExitCodeProcess(pi.hProcess, &exitCode);
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
+
+    bool exists = (::GetFileAttributesW(lnkPath.c_str()) != INVALID_FILE_ATTRIBUTES);
+    ConfigDebugLog("[AUTOSTART] StartupFolder: exitCode=%lu, lnk exists=%d\n", exitCode, (int)exists);
+    return exists;
 }
 
 } // namespace moekoe

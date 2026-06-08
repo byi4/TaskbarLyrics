@@ -402,6 +402,19 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     </div>
 </div>
 
+<!-- 通用 -->
+<div class="section">
+    <div class="section-title">通用</div>
+    <div class="row">
+        <label>启用歌词显示</label>
+        <label class="switch"><input type="checkbox" id="enabledChk" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+        <label>开机自动启动</label>
+        <label class="switch"><input type="checkbox" id="autoStartChk" checked><span class="slider"></span></label>
+    </div>
+</div>
+
 <!-- 操作按钮 -->
 <div class="section">
     <div class="btn-row">
@@ -512,6 +525,10 @@ function applyConfigToUI(cfg) {
     const adv = cfg.advanced || {};
     const pos = cfg.position || {};
 
+    // 通用
+    document.getElementById('enabledChk').checked = cfg.enabled !== false;
+    document.getElementById('autoStartChk').checked = cfg.auto_start !== false;
+
     // 外观
     document.getElementById('fontFamily').value = a.font_family || '华文细黑';
     document.getElementById('fontSize').value = a.font_size || 20;
@@ -546,8 +563,8 @@ function applyConfigToUI(cfg) {
 // ---- 从 UI 收集配置 ----
 function collectConfig() {
     return {
-        enabled: true,
-        auto_start: true,
+        enabled: document.getElementById('enabledChk').checked,
+        auto_start: document.getElementById('autoStartChk').checked,
         appearance: {
             highlight_color: document.getElementById('highlightColor').value,
             normal_color: document.getElementById('normalColor').value,

@@ -1,12 +1,38 @@
 # MoeKoeMusic Taskbar Lyrics
 
->  Windows 任务栏的歌词显示插件（v0.3.1）
+> Windows 任务栏的歌词显示插件（v0.3.1）
 
 ## 项目简介
 
 这是一个独立运行的 Windows 工具，**不修改 MoeKoeMusic 本体**，通过监听其 WebSocket 服务（端口 6520）实时获取歌词与播放状态，并将歌词作为任务栏上方的浮动窗口进行渲染。
 
-作为 **MoeKoeMusic 插件** 集成，支持从插件 popup 界面启动/停止。
+作为 **MoeKoeMusic 插件** 集成，但目前还不支持从插件 popup 界面启动（倒是可以从这个界面停止）。
+
+## 当前状态 (v0.3.1)
+
+### 已完成
+
+- Direct2D 透明窗口渲染 + 逐字高亮
+- 悬停显示按钮（上一首/暂停/下一首）
+- 拖动定位（约束在任务栏范围内，带视觉边框反馈）
+- WebView2 设置界面 + Win32 回退（理论上应该没有问题）
+- 配置持久化（%APPDATA%）
+- 6 种预设主题色
+- HTTP 接口（ping/shutdown）
+- Z-order 三重防护（防止被任务栏覆盖）
+- API 模式自动检测与开启（连接失败时自动开启 MoeKoeMusic 的 WS 服务）
+- 刷新率最高 120 FPS（30FPS时看起来歌词高亮效果卡顿，60相对于30来说有所缓解，但120相对于60似乎并未感觉有提升？）
+
+### 待改进
+
+- 插件 popup 的 EXE 启动方式验证（无法启动）
+- 多显示器支持（待测试）
+- 歌词缓存（离线显示，待测试）
+- 多方向任务栏适配（待测试？我没找到把任务栏挪到左侧/右侧/上边框的设置。但隐藏任务栏时歌词会随着任务栏一同隐藏）
+- 字体/颜色/字号/透明度/卡拉OK/翻译 全部可配（实测在应用中切换翻译时，任务栏歌词未切换）
+- 插件 popup 启动/停止（实测可停止但无法开启）
+- 长歌词跑马灯滚动（bounce/loop/off 三种模式，待测试）
+- Windhawk / Explorer Hook 方案（真正嵌入任务栏的方案后续会考虑的）
 
 ## 主要特性
 
@@ -43,55 +69,6 @@
 
 - **绑定模式**：EXE 放在 MoeKoeMusic 目录下，随主进程启停（目前还未能随主进程启停）
 - **独立模式**：常驻系统托盘，手动管理生命周期
-
-## 项目架构
-
-```
-MoeKoeTaskbarLyrics.exe (C++ Win32)
-├── Lyrics Window (Layered Window + Direct2D)
-│   ├── 歌词渲染（居中对齐 + 逐字高亮）
-│   ├── 翻译文本渲染
-│   ├── 悬停控制按钮（⏮ ⏸ ⏭）
-│   └── 拖动定位（约束在任务栏范围内）
-├── Tray Icon (系统托盘)
-├── Settings Window (WebView2 → Win32 回退)
-│   └── 加载 resources/settings.html
-├── HTTP Server (端口 6521)
-│   ├── GET /ping → {"status":"ok"}
-│   └── POST /shutdown → 退出
-├── WebSocket Client (连接 :6520)
-│   └── 接收歌词数据 + 发送控制指令
-├── Process Monitor (绑定模式)
-└── Config (%APPDATA%/MoeKoeTaskbarLyrics/config.json)
-
-插件端 (Chrome Extension V3)
-├── manifest.json
-├── background.js (Service Worker, WS 中转)
-├── popup.html / popup.js (启动/停止/控制 UI)
-└── MoeKoeTaskbarLyrics.exe
-```
-
-## 文件结构
-
-```
-src/
-├── main.cpp              # 入口、消息循环、IPC 处理
-├── taskbar_window.cpp/h  # 歌词窗口创建、定位、鼠标事件、拖动
-├── renderer.cpp/h        # Direct2D/DirectWrite 渲染引擎
-├── lyrics_parser.cpp/h   # WebSocket 数据解析、进度计算
-├── websocket_client.cpp/h# ixWebSocket 封装
-├── http_server.cpp/h     # 内嵌 HTTP 服务器（ping/shutdown）
-├── settings_window.cpp/h # WebView2 设置界面宿主窗口
-├── config_dialog.cpp/h   # Win32 设置对话框（回退方案）
-├── config.cpp/h          # JSON 配置读写
-├── tray_icon.cpp/h       # 系统托盘图标+菜单
-├── process_monitor.cpp/h # 绑定模式进程监控
-└── lyrics_data.h         # 共享数据结构定义
-
-resources/
-├── settings.html         # WebView2 设置页面（HTML/CSS/JS）
-└── icon.ico              # 应用图标
-```
 
 ## 环境要求
 
@@ -135,33 +112,6 @@ cmake --build build --config x64-Debug
 - 开发版：`MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics/`
 - 安装版：`%APPDATA%/moekoemusic/extensions/moeKoe-taskbar-lyrics/`
 
-在 MoeKoeMusic 的插件页面点击 popup 启动。
+在 MoeKoeMusic 的插件页面点击”打开插件目录“，打开`moeKoe-taskbar-lyrics`文件夹，双击\`MoeKoeTaskbarLyrics.exe\`启动。
 
-## 当前状态 (v0.3.1)
-
-### 已完成
-
-- [x] Direct2D 透明窗口渲染 + 逐字高亮
-- [x] 悬停控制按钮（上一首/暂停/下一首）
-- [x] 多方向任务栏适配
-- [x] 拖动定位（约束在任务栏范围内，带视觉边框反馈）
-- [x] WebView2 设置界面 + Win32 回退
-- [x] 配置持久化（%APPDATA%）
-- [x] 字体/颜色/字号/透明度/卡拉OK/翻译 全部可配
-- [x] 6 种预设主题色
-- [x] HTTP 接口（ping/shutdown）
-- [x] 插件 popup 启动/停止
-- [x] Z-order 三重防护（防止被任务栏覆盖）
-- [x] 长歌词跑马灯滚动（bounce/loop/off 三种模式）
-- [x] API 模式自动检测与开启（连接失败时自动开启 MoeKoeMusic 的 WS 服务）
-- [x] 刷新率最高 120 FPS
-
-### 待改进
-
-- [ ] WebView2 设置界面的实际测试和调试
-- [ ] 插件 popup 的 EXE 启动方式验证（file:// 协议是否有效）
-- [ ] 多显示器支持
-- [ ] 自动隐藏（无歌词时隐藏窗口）
-- [ ] 歌词缓存（离线显示）
-- [ ] Windhawk / Explorer Hook 方案（真正嵌入任务栏）
-
+## 如果你想进一步了解本项目，可以查看MoeKoeMusic\_TaskbarLyrics\_开发文档.md

@@ -566,6 +566,13 @@ void SettingsWindow::ApplyConfigFromJson(void* jsonPtr) {
         currentConfig_.MutableAdvanced().debugLog =
             a.value("debug_log", currentConfig_.Advanced().debugLog);
     }
+    // 通用开关（需要同步注册表）
+    if (c.contains("enabled")) {
+        currentConfig_.SetEnabled(c["enabled"].get<bool>());
+    }
+    if (c.contains("auto_start")) {
+        currentConfig_.SetAutoStart(c["auto_start"].get<bool>());
+    }
 }
 
 void SettingsWindow::SendConfigToWebView(const Config& cfg) {
@@ -574,6 +581,8 @@ void SettingsWindow::SendConfigToWebView(const Config& cfg) {
     json j;
     j["type"] = "initConfig";
     j["config"] = {
+        {"enabled", cfg.IsEnabled()},
+        {"auto_start", cfg.IsAutoStart()},
         {"appearance", {
             {"font_family", cfg.Appearance().fontFamily},
             {"font_size", cfg.Appearance().fontSize},

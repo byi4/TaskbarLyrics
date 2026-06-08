@@ -56,6 +56,9 @@ public:
     void SetMenuCheckedAutoStart(bool checked);
     void SetMenuLabelEnable(const std::wstring& label);
 
+    // 显示气泡通知（用于自启状态变更等反馈）
+    void ShowBalloon(const std::wstring& title, const std::wstring& msg);
+
     // 设置绑定模式（影响是否显示"解除绑定"菜单项）
     void SetBoundMode(bool bound) { boundMode_ = bound; if (hMenu_) RebuildMenu(); }
 
@@ -84,6 +87,7 @@ private:
     bool checkedAutoStart_{true};
     bool boundMode_{false};
     std::wstring labelEnable_{L"启用歌词显示"};
+    std::wstring lastTooltip_;  // 缓存上一次 tooltip，避免每帧 NIM_MODIFY 导致闪烁
 
     MenuCallback menuCallback_;
 };

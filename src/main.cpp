@@ -117,14 +117,16 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
     case ID_MENU_ENABLE: {
         const bool newState = !app.config->IsEnabled();
         app.config->SetEnabled(newState);
-        if (newState) {
-            app.config->SetAutoStart(true);
-        }
+        // 注意：启用歌词不应强制改变开机自启状态，由用户在设置中独立控制
         app.config->Save();
 
         if (app.tray) {
             app.tray->SetMenuCheckedEnable(newState);
             app.tray->SetMenuCheckedAutoStart(app.config->IsAutoStart());
+        }
+        // 同步设置窗口 UI（如果已打开）
+        if (app.settingsWindow && app.settingsWindow->IsWebViewReady()) {
+            app.settingsWindow->SendConfigToWebView(*app.config);
         }
         if (!newState) {
             ::PostMessageW(app.hwnd, WM_CLOSE, 0, 0);
@@ -133,10 +135,41 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
     }
     case ID_MENU_AUTOSTART: {
         const bool newState = !app.config->IsAutoStart();
-        app.config->SetAutoStart(newState);
+        const bool regOk = app.config->SetAutoStart(newState);
         app.config->Save();
         if (app.tray) {
             app.tray->SetMenuCheckedAutoStart(newState);
+        }
+        // 用 MessageBox 直接弹模态对话框反馈结果（气泡通知在 Win10/11 常被禁用）
+        const std::wstring title = L"开机自启";
+        std::wstring msg;
+        if (regOk) {
+            if (newState) {
+                msg = L"已启用开机自启。\n\n"
+                      L"程序会尝试以下三种方式（按顺序，自动跳过失败的）：\n"
+                      L"1) 注册表 Run 键（可能被杀毒软件拦截）\n"
+                      L"2) 任务计划程序（推荐）\n"
+                      L"3) 启动文件夹快捷方式\n\n"
+                      L"查看实际生效方式：\n"
+                      L"注册表: reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n"
+                      L"任务计划: schtasks /Query /TN MoeKoeTaskbarLyrics_AutoStart\n"
+                      L"启动文件夹: %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup";
+            } else {
+                msg = L"已禁用开机自启，所有方式均已清理。";
+            }
+        } else {
+            msg = L"开机自启设置失败！\n\n"
+                  L"三种方式都未生效：\n"
+                  L"1. 注册表 Run 键（最可能被拦截）\n"
+                  L"2. 任务计划程序 schtasks\n"
+                  L"3. 启动文件夹 PowerShell 快捷方式\n\n"
+                  L"请查看 debug.log 获取详细错误。";
+        }
+        ::MessageBoxW(app.hwnd, msg.c_str(), title.c_str(),
+            regOk ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
+        // 同步设置窗口 UI（如果已打开）
+        if (app.settingsWindow && app.settingsWindow->IsWebViewReady()) {
+            app.settingsWindow->SendConfigToWebView(*app.config);
         }
         break;
     }
@@ -157,6 +190,11 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
                     app.taskbarWindow->SetDragOffset(
                         cfg.Position().offsetX, cfg.Position().offsetY);
                     app.taskbarWindow->Reposition();
+                }
+                // 同步托盘菜单状态
+                if (app.tray) {
+                    app.tray->SetMenuCheckedEnable(cfg.IsEnabled());
+                    app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
                 }
                 DebugLog("[SETTINGS] Config applied and saved\n");
             });

@@ -56,7 +56,8 @@ public:
     bool IsEnabled()    const { return enabled_; }
     bool IsAutoStart()  const { return autoStart_; }
     void SetEnabled(bool v)   { enabled_ = v; }
-    void SetAutoStart(bool v);
+    // 设置并立即写注册表；返回注册表操作是否成功
+    bool SetAutoStart(bool v);
 
     // ---- 配置子结构 ----
     const AppearanceConfig& Appearance() const { return appearance_; }
@@ -70,8 +71,13 @@ public:
     static std::string GetConfigPath();
 
 private:
+    // 注册表 Run 键方案
     bool SetAutoStartRegistry(bool enable);
     static std::string GetAutoStartRegistryKey();
+    // 任务计划程序方案（自启的备选/主推方式，避开杀毒软件对 Run 键的拦截）
+    bool SetAutoStartTaskScheduler(bool enable);
+    // 启动文件夹快捷方式方案
+    bool SetAutoStartStartupFolder(bool enable);
 
     bool             enabled_{true};
     bool             autoStart_{true};

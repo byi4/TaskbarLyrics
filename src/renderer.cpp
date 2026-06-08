@@ -253,11 +253,11 @@ void TaskbarRenderer::DrawHighlightedTextPerCharacter(const std::wstring& text,
     const float paddingX = constants::TEXT_PADDING_X;
     const float availableWidth = static_cast<FLOAT>(width_) - paddingX * 2.0f;
 
-    // 布局区域
+    // 布局区域（用于文本度量）
     D2D1_RECT_F layoutRect = D2D1::RectF(
         paddingX, 0.0f, static_cast<FLOAT>(width_) - paddingX, static_cast<FLOAT>(height_));
 
-    // 获取文本度量（用于居中计算和高亮裁剪）
+    // 获取文本度量
     Microsoft::WRL::ComPtr<IDWriteTextLayout> fullLayout;
     bool hasLayout = false;
     DWRITE_TEXT_METRICS metrics{};
@@ -270,40 +270,60 @@ void TaskbarRenderer::DrawHighlightedTextPerCharacter(const std::wstring& text,
         }
     }
 
-    // 计算文本绘制位置
     const float textWidth = hasLayout ? metrics.width : 0.0f;
-    float textLeft = paddingX;  // 默认左对齐起始位置
 
-    if (scrollOffset > 0.0f && hasLayout) {
-        // 跑马灯模式：文本左边缘从居中位置向左偏移 scrollOffset 像素
+    // ── 判断是否需要跑马灯滚动 ──
+    const bool needsMarquee = (hasLayout && textWidth > availableWidth + 1.0f
+                               && scrollOffset > 0.0f);
+
+    if (needsMarquee) {
+        // ═══════ 滚动模式：用 DrawTextLayout + 精确坐标 ═══════
+        // 将布局改为左对齐，避免 CENTER 对齐导致的位置偏差
+        fullLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+
+        // 文本从"视觉居中位置"向左偏移 scrollOffset
         const float centeredLeft = paddingX + (availableWidth - textWidth) / 2.0f;
-        textLeft = centeredLeft - scrollOffset;
-    } else if (hasLayout) {
-        // 非滚动模式：居中显示
-        textLeft = paddingX + (availableWidth - textWidth) / 2.0f;
+        const float textLeft = centeredLeft - scrollOffset;
+
+        // 用 DrawTextLayout + Point2F 精确定位，完全绕过 DrawTextW 的自动对齐
+        renderTarget_->DrawTextLayout(
+            D2D1::Point2F(textLeft, 0.0f), fullLayout.Get(), normalBrush_.Get());
+
+        if (enableKaraoke && progress > 0.0 && hasLayout) {
+            const float highlightWidth = std::min(textWidth * static_cast<float>(progress), textWidth);
+            if (highlightWidth > 0.0f) {
+                // 高亮裁剪区域：从 textLeft 开始，宽度为 highlightWidth
+                D2D1_RECT_F clipRect = D2D1::RectF(
+                    textLeft, 0.0f,
+                    textLeft + highlightWidth,
+                    static_cast<FLOAT>(height_));
+                renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                renderTarget_->DrawTextLayout(
+                    D2D1::Point2F(textLeft, 0.0f), fullLayout.Get(), highlightBrush_.Get());
+                renderTarget_->PopAxisAlignedClip();
+            }
+        }
+    } else {
+        // ═══════ 非滚动模式：居中显示（原有逻辑）═══════
+        renderTarget_->DrawTextW(
+            text.c_str(), length, textFormat_.Get(), layoutRect, normalBrush_.Get());
+
+        if (enableKaraoke && progress > 0.0 && hasLayout) {
+            const float highlightWidth = std::min(textWidth * static_cast<float>(progress), textWidth);
+            if (highlightWidth <= 0.0f) return;
+
+            // 非滚动模式下，文本在 layoutRect 内居中
+            const float centeredLeft = paddingX + (availableWidth - textWidth) / 2.0f;
+            D2D1_RECT_F clipRect = D2D1::RectF(
+                centeredLeft, 0.0f,
+                centeredLeft + highlightWidth,
+                static_cast<FLOAT>(height_));
+            renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            renderTarget_->DrawTextW(
+                text.c_str(), length, textFormat_.Get(), layoutRect, highlightBrush_.Get());
+            renderTarget_->PopAxisAlignedClip();
+        }
     }
-    // 若无 metrics 信息，使用默认的 DWRITE_TEXT_ALIGNMENT_CENTER 居中
-
-    // 先画全部普通颜色（使用原始 layoutRect 让 DirectWrite 自动居中/对齐）
-    renderTarget_->DrawTextW(
-        text.c_str(), length, textFormat_.Get(), layoutRect, normalBrush_.Get());
-
-    if (!enableKaraoke || progress <= 0.0 || !hasLayout) return;
-
-    // 高亮部分的像素宽度
-    const float highlightWidth = std::min(textWidth * static_cast<float>(progress), textWidth);
-    if (highlightWidth <= 0.0f) return;
-
-    // 用裁剪区域画出高亮的部分（位置跟随滚动偏移）
-    D2D1_RECT_F clipRect = D2D1::RectF(
-        textLeft,
-        0.0f,
-        textLeft + highlightWidth,
-        static_cast<FLOAT>(height_));
-    renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-    renderTarget_->DrawTextW(
-        text.c_str(), length, textFormat_.Get(), layoutRect, highlightBrush_.Get());
-    renderTarget_->PopAxisAlignedClip();
 }
 
 void TaskbarRenderer::DrawTranslatedText(const std::wstring& text) {

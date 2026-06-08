@@ -136,6 +136,9 @@ void TrayIcon::DestroyMenu() {
 
 void TrayIcon::SetTooltip(const std::wstring& text) {
     if (!added_) return;
+    // 只有 tooltip 文本真正变化时才调用 NIM_MODIFY，避免每帧刷新导致图标闪烁
+    if (text == lastTooltip_) return;
+    lastTooltip_ = text;
     std::wcsncpy(nid_.szTip, text.c_str(), ARRAYSIZE(nid_.szTip));
     nid_.szTip[ARRAYSIZE(nid_.szTip) - 1] = L'\0';
     nid_.uFlags = NIF_TIP;
@@ -157,6 +160,17 @@ void TrayIcon::SetMenuCheckedAutoStart(bool checked) {
 void TrayIcon::SetMenuLabelEnable(const std::wstring& label) {
     labelEnable_ = label;
     if (hMenu_) RebuildMenu();
+}
+
+void TrayIcon::ShowBalloon(const std::wstring& title, const std::wstring& msg) {
+    if (!added_) return;
+    NOTIFYICONDATAW nidBalloon = nid_;
+    nidBalloon.uFlags = NIF_INFO | NIF_TIP;
+    nidBalloon.dwInfoFlags = NIIF_INFO;
+    wcsncpy_s(nidBalloon.szInfoTitle, title.c_str(), _TRUNCATE);
+    wcsncpy_s(nidBalloon.szInfo, msg.c_str(), _TRUNCATE);
+    nidBalloon.cbSize = sizeof(nidBalloon);
+    ::Shell_NotifyIconW(NIM_MODIFY, &nidBalloon);
 }
 
 void TrayIcon::ShowContextMenu(HWND hwnd) {
