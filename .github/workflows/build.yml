@@ -17,22 +17,31 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install dependencies (using system vcpkg, auto-retry on network issues)
+      - name: Install WebView2 SDK (NuGet)
+        shell: powershell
+        run: |
+          nuget install Microsoft.Web.WebView2 -Version 1.0.3856.49 -OutputDirectory "${{ github.workspace }}\packages"
+
+      - name: Install dependencies (auto-retry on network issues)
         shell: powershell
         run: |
           $maxRetries = 3
           for ($i = 0; $i -lt $maxRetries; $i++) {
               vcpkg install --classic --triplet x64-windows --x-install-root="${{ github.workspace }}\vcpkg_installed" ixwebsocket nlohmann-json zlib mbedtls
-              if ($LASTEXITCODE -eq 0) { Write-Host "All dependencies installed successfully!"; break }
-              Write-Host "Installation failed (attempt $($i+1)/$maxRetries). Retrying in 5 seconds..."
+              if ($LASTEXITCODE -eq 0) { break }
+              Write-Host "Retry $($i+1)/$maxRetries..."
               Start-Sleep -Seconds 5
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Configure CMake
+        shell: powershell
         run: |
+          $webview2Dir = "${{ github.workspace }}\packages\Microsoft.Web.WebView2.1.0.3856.49"
           cmake -B build -S . `
             "-DVCPKG_INSTALLED_DIR=${{ github.workspace }}\vcpkg_installed\x64-windows" `
+            "-DWEBVIEW2_INCLUDE_DIR=$webview2Dir\build\native\include" `
+            "-DWEBVIEW2_LOADER_LIB=$webview2Dir\build\native\x64\WebView2Loader.dll" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
