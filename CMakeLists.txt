@@ -105,7 +105,10 @@ set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
 message(STATUS "Found nlohmann_json: ${NLOHMANN_JSON_INCLUDE_DIR}")
 
 # 6. WebView2 SDK（NuGet 包或系统安装）
+# 优先使用 CMake 变量指定的路径（CI 环境），再回退到常见安装路径
 find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
+    HINTS
+        "${WEBVIEW2_INCLUDE_DIR}"
     PATHS
         "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/include"
         "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
@@ -119,6 +122,8 @@ endif()
 
 # 7. WebView2 Loader 库（运行时动态链接）
 find_library(WEBVIEW2_LOADER_LIB WebView2Loader
+    HINTS
+        "${WEBVIEW2_LOADER_LIB}"
     PATHS
         "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/x64"
         "C:/Program Files (x86)/Microsoft/Edge WebView2"
