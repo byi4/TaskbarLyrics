@@ -29,12 +29,12 @@ jobs:
           $vcpkgRoot = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\vcpkg"
           $vcpkg = "$vcpkgRoot\vcpkg.exe"
           
-          # Create vcpkg-configuration.json with builtin registry AND baseline
+          # Create vcpkg-configuration.json with builtin registry and baseline commit SHA
           @"
           {
             "default-registry": {
               "kind": "builtin",
-              "baseline": "master"
+              "baseline": "75672db6bd812b060482b0f00b5a16b18a0c0f07"
             }
           }
           "@ | Out-File -FilePath "${{ github.workspace }}\vcpkg-configuration.json" -Encoding utf8
