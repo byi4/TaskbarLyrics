@@ -15,16 +15,9 @@
 namespace moekoe {
 
 namespace {
-void DebugLog(const char* fmt, ...) {
-    // 复用 main.cpp 的日志路径
-    const char* logPath = "D:\\MoeKoeMusic-plugin\\MoeKoeMusic-TaskbarLyrics\\debug.log";
-    FILE* f = fopen(logPath, "a");
-    if (!f) return;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(f, fmt, args);
-    va_end(args);
-    fclose(f);
+void DebugLog(const char* /*fmt*/, ...) {
+    // 日志已在 main.cpp 中集中处理，这里不做任何操作
+    // 避免硬编码用户特定路径
 }
 
 // 发送 HTTP 响应

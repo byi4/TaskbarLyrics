@@ -7,6 +7,7 @@
 
 const WS_PORT = 6520;
 const RECONNECT_INTERVAL = 3000;
+const CONNECT_TIMEOUT = 5000; // 5 秒连接超时
 const EXTENSION_DIR = 'moeKoe-taskbar-lyrics';
 
 let ws = null;
@@ -19,8 +20,22 @@ function connectWebSocket() {
 
     try {
         ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+        let connectionTimeout = null;
+        let hasConnected = false;
+
+        // 设置连接超时
+        connectionTimeout = setTimeout(() => {
+            if (!hasConnected && ws && ws.readyState !== WebSocket.OPEN) {
+                console.log('[TaskbarLyrics] WebSocket 连接超时');
+                ws.close();
+                // 超时后立即尝试重连
+                setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+            }
+        }, CONNECT_TIMEOUT);
 
         ws.onopen = () => {
+            hasConnected = true;
+            if (connectionTimeout) clearTimeout(connectionTimeout);
             connected = true;
             console.log('[TaskbarLyrics] WebSocket 已连接');
             broadcastToPopup({ type: 'connectionStatus', connected: true });
@@ -36,10 +51,12 @@ function connectWebSocket() {
         };
 
         ws.onclose = () => {
+            if (connectionTimeout) clearTimeout(connectionTimeout);
             connected = false;
             console.log('[TaskbarLyrics] WebSocket 已断开');
             broadcastToPopup({ type: 'connectionStatus', connected: false });
-            setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+            // 只有在成功连接后又断开时才使用常规重连间隔
+            setTimeout(connectWebSocket, hasConnected ? RECONNECT_INTERVAL : 1000);
         };
 
         ws.onerror = () => {

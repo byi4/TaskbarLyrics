@@ -57,23 +57,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 获取插件目录路径（EXE 所在目录）
-    async function getPluginDir() {
-        // 候选列表（按优先级）
-        const candidates = [
-            'C:\\Users\\19624\\AppData\\Roaming\\moekoemusic\\extensions\\moeKoe-taskbar-lyrics',
-            'D:\\MoeKoeMusic-plugin\\MoeKoeMusic\\plugins\\extensions\\moeKoe-taskbar-lyrics',
-        ];
-
-        // 如果 electronAPI 有获取路径的方法，优先使用
-        if (window.electronAPI && window.electronAPI.getExtensionPath) {
-            try {
-                const p = await window.electronAPI.getExtensionPath();
-                if (p) return p;
-            } catch (_) {}
-        }
-
-        return candidates[0];
+async function getPluginDir() {
+    // 如果 electronAPI 有获取路径的方法，优先使用
+    if (window.electronAPI && window.electronAPI.getExtensionPath) {
+        try {
+            const p = await window.electronAPI.getExtensionPath();
+            if (p) return p;
+        } catch (_) {}
     }
+
+    // 回退到相对路径（如果可能）
+    // 注意：这只是一个占位符，实际路径需要由 MoeKoeMusic 通过 electronAPI 提供
+    return '';
+}
 
     // 启动 EXE
     async function launchExe() {
@@ -85,23 +81,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // 检查方法是否存在
             if (typeof window.electronAPI.startNativeLauncher === 'function') {
                 try {
-                    // showDiag(JSON.stringify(diagInfo, null, 2)
-                    //     + '\n\n--- 启动日志 ---\n'
-                    //     + '调用 startNativeLauncher("' + pluginDir + '") ...');
                     const result = await window.electronAPI.startNativeLauncher(pluginDir);
-                    // showDiag(showDiag.textContent + '\n结果: ' + JSON.stringify(result));
                     console.log('[TaskbarLyrics] startNativeLauncher 结果:', result);
                     return true;
                 } catch (e) {
                     const errMsg = 'startNativeLauncher 错误: ' + (e.message || e);
-                    // showDiag(showDiag.textContent + '\n' + errMsg);
                     console.error('[TaskbarLyrics]', errMsg);
                     // 不立即返回 false，继续尝试其他方式
                 }
-            } else {
-                // showDiag(showDiag.textContent
-                //     + '\n\nstartNativeLauncher 不是函数，类型: '
-                //     + typeof window.electronAPI.startNativeLauncher);
             }
 
             // 方式1b: 尝试其他可能的方法名

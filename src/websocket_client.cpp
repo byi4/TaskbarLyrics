@@ -165,13 +165,9 @@ int BackoffSeconds(int attempt) {
     return 15;
 }
 
-void DebugLog(const std::string& msg) {
-    // 写到项目目录 debug.log
-    const char* logPath = "D:\\MoeKoeMusic-plugin\\MoeKoeMusic-TaskbarLyrics\\debug.log";
-    if (FILE* f = fopen(logPath, "a")) {
-        fprintf(f, "[%llu] %s\n", GetTickCount64() % 100000, msg.c_str());
-        fclose(f);
-    }
+void DebugLog(const std::string& /*msg*/) {
+    // 日志已在 main.cpp 中集中处理，这里不做任何操作
+    // 避免硬编码用户特定路径
 }
 
 } // namespace
