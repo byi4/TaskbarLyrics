@@ -17,18 +17,21 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Setup vcpkg
-        uses: microsoft/vcpkg-action@v8
-        with:
-          vcpkg-triplet: x64-windows
-          vcpkg-dir: ${{ github.workspace }}/vcpkg
-          vcpkg-commit: 2025.04.23
-          cache-key: "${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}"
-          packages: ixwebsocket nlohmann-json zlib mbedtls
+      - name: Get vcpkg
+        run: |
+          cd ${{ github.workspace }}
+          git clone https://github.com/microsoft/vcpkg.git --depth=1
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+
+      - name: Install dependencies
+        run: |
+          cd ${{ github.workspace }}\vcpkg
+          .\vcpkg.exe install --triplet x64-windows ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
-          $vcpkgInstalled = "${{ github.workspace }}/vcpkg/installed/x64-windows"
+          $vcpkgInstalled = "${{ github.workspace }}\vcpkg\installed\x64-windows"
           cmake -B build -S . `
             "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled" `
             -DCMAKE_BUILD_TYPE=Release
