@@ -33,18 +33,25 @@ jobs:
 
       - name: Bootstrap vcpkg
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        shell: powershell
         run: |
+          $env:VCPKG_ROOT = ""
           cd vcpkg
           .\bootstrap-vcpkg.bat -disableMetrics
 
       - name: Install dependencies
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        shell: powershell
         run: |
+          $env:VCPKG_ROOT = ""
           cd vcpkg
-          .\vcpkg.exe install --triplet x64-windows ixwebsocket nlohmann-json zlib mbedtls
+          $vcpkgRoot = (Get-Location).Path
+          .\vcpkg.exe install --triplet x64-windows --vcpkg-root="$vcpkgRoot" ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
+        shell: powershell
         run: |
+          $env:VCPKG_ROOT = ""
           $vcpkgInstalled = "${{ github.workspace }}\vcpkg\installed\x64-windows"
           cmake -B build -S . `
             "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled" `
