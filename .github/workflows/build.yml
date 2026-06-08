@@ -26,12 +26,26 @@ jobs:
         shell: powershell
         run: |
           # Use VS 2022's fully bootstrapped vcpkg
-          $env:VCPKG_ROOT = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\vcpkg"
-          $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
+          $vcpkgRoot = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\vcpkg"
+          $vcpkg = "$vcpkgRoot\vcpkg.exe"
+          
+          # Get the vcpkg commit hash for the builtin-baseline
+          $baseline = (git -C $vcpkgRoot rev-parse HEAD).Trim()
+          Write-Host "vcpkg baseline: $baseline"
+          
+          # Generate vcpkg.json with the correct baseline
+          @"
+          {
+            "name": "moekoetaskbarlyrics",
+            "version": "0.3.1",
+            "builtin-baseline": "$baseline",
+            "dependencies": ["ixwebsocket", "nlohmann-json", "zlib", "mbedtls"]
+          }
+          "@ | Out-File -FilePath "${{ github.workspace }}\vcpkg.json" -Encoding utf8
+          
           $maxRetries = 3
           for ($i = 0; $i -lt $maxRetries; $i++) {
-              # Manifest mode: reads vcpkg.json from project root, no --classic needed
-              & $vcpkg install --triplet x64-windows --vcpkg-root="$env:VCPKG_ROOT" --x-install-root="${{ github.workspace }}\vcpkg_installed"
+              & $vcpkg install --triplet x64-windows --vcpkg-root="$vcpkgRoot" --x-install-root="${{ github.workspace }}\vcpkg_installed"
               if ($LASTEXITCODE -eq 0) { break }
               Write-Host "Retry $($i+1)/$maxRetries..."
               Start-Sleep -Seconds 5
