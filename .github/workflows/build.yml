@@ -17,9 +17,17 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install dependencies (using system vcpkg)
+      - name: Install dependencies (using system vcpkg, auto-retry on network issues)
+        shell: powershell
         run: |
-          vcpkg install --classic --triplet x64-windows --x-install-root="${{ github.workspace }}\vcpkg_installed" ixwebsocket nlohmann-json zlib mbedtls
+          $maxRetries = 3
+          for ($i = 0; $i -lt $maxRetries; $i++) {
+              vcpkg install --classic --triplet x64-windows --x-install-root="${{ github.workspace }}\vcpkg_installed" ixwebsocket nlohmann-json zlib mbedtls
+              if ($LASTEXITCODE -eq 0) { Write-Host "All dependencies installed successfully!"; break }
+              Write-Host "Installation failed (attempt $($i+1)/$maxRetries). Retrying in 5 seconds..."
+              Start-Sleep -Seconds 5
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Configure CMake
         run: |
