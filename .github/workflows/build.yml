@@ -17,32 +17,18 @@ jobs:
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Get vcpkg cache
-        id: cache-vcpkg
-        uses: actions/cache@v4
+      - name: Run vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          path: ${{ github.workspace }}/vcpkg_installed
-          key: vcpkg-x64-windows-${{ hashFiles('**/CMakeLists.txt') }}
-
-      - name: Bootstrap vcpkg
-        run: |
-          cd ${{ github.workspace }}
-          git clone https://github.com/microsoft/vcpkg.git --depth=1
-          .\vcpkg\bootstrap-vcpkg.bat
-
-      - name: Install vcpkg dependencies
-        run: |
-          $env:VCPKG_ROOT="${{ github.workspace }}\vcpkg"
-          & "${env:VCPKG_ROOT}\vcpkg.exe" install `
-            --triplet x64-windows `
-            --x-install-root="${{ github.workspace }}\vcpkg_installed" `
-            ixwebsocket nlohmann-json zlib mbedtls
+          vcpkgJsonGlob: '**/vcpkg.json'
+          vcpkgConfigurationJsonGlob: '**/vcpkg-configuration.json'
 
       - name: Configure CMake
         run: |
+          $vcpkgDir = "${{ github.workspace }}\build\vcpkg_installed\x64-windows"
           cmake -B build -S . `
-            "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            "-DVCPKG_INSTALLED_DIR=${{ github.workspace }}\vcpkg_installed\x64-windows" `
+            "-DCMAKE_TOOLCHAIN_FILE=${{ env.RUNVCPKG_VCPKG_ROOT_OUT }}\scripts\buildsystems\vcpkg.cmake" `
+            "-DVCPKG_INSTALLED_DIR=$vcpkgDir" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
