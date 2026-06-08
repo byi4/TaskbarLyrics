@@ -19,7 +19,7 @@ jobs:
 
       - name: Install dependencies (using system vcpkg)
         run: |
-          vcpkg install --triplet x64-windows --x-install-root="${{ github.workspace }}\vcpkg_installed" ixwebsocket nlohmann-json zlib mbedtls
+          vcpkg install --classic --triplet x64-windows --x-install-root="${{ github.workspace }}\vcpkg_installed" ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
