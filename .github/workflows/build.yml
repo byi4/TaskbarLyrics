@@ -14,21 +14,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup MSVC Developer Command Prompt
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Run vcpkg
-        uses: lukka/run-vcpkg@v11
+      - name: Setup vcpkg
+        uses: microsoft/vcpkg-action@v8
         with:
-          vcpkgJsonGlob: '**/vcpkg.json'
-          vcpkgConfigurationJsonGlob: '**/vcpkg-configuration.json'
+          vcpkg-triplet: x64-windows
+          vcpkg-dir: ${{ github.workspace }}/vcpkg
+          vcpkg-commit: 2025.04.23
+          cache-key: "${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}"
+          packages: ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
-          $vcpkgDir = "${{ github.workspace }}\build\vcpkg_installed\x64-windows"
+          $vcpkgInstalled = "${{ github.workspace }}/vcpkg/installed/x64-windows"
           cmake -B build -S . `
-            "-DCMAKE_TOOLCHAIN_FILE=${{ env.RUNVCPKG_VCPKG_ROOT_OUT }}\scripts\buildsystems\vcpkg.cmake" `
-            "-DVCPKG_INSTALLED_DIR=$vcpkgDir" `
+            "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -44,4 +46,3 @@ jobs:
             build/Release/z.dll
             resources/settings.html
             resources/icon.ico
-          if-no-files-found: error

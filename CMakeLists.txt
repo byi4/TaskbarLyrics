@@ -23,7 +23,14 @@ endif()
 find_package(Threads REQUIRED)
 
 # ---- 手动配置 vcpkg 安装的第三方库（绕过 vcpkg 工具链） ----
-set(VCPKG_INSTALLED_DIR "D:/vcpkg/installed/x64-windows-142")
+if(NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "D:/vcpkg/installed/x64-windows-142")
+endif()
+
+# 确保目录存在
+if(NOT EXISTS "${VCPKG_INSTALLED_DIR}")
+    message(FATAL_ERROR "VCPKG_INSTALLED_DIR does not exist: ${VCPKG_INSTALLED_DIR}")
+endif()
 
 # 1. ZLIB
 find_library(ZLIB_LIBRARY_RELEASE NAMES z zlib PATHS "${VCPKG_INSTALLED_DIR}/lib" NO_DEFAULT_PATH)
