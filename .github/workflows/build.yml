@@ -17,24 +17,40 @@ jobs:
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Get vcpkg cache
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_installed
+          key: vcpkg-x64-windows-${{ hashFiles('**/CMakeLists.txt') }}
+
+      - name: Bootstrap vcpkg
+        run: |
+          cd ${{ github.workspace }}
+          git clone https://github.com/microsoft/vcpkg.git --depth=1
+          .\vcpkg\bootstrap-vcpkg.bat
+
       - name: Install vcpkg dependencies
         run: |
-          vcpkg install ixwebsocket:x64-windows nlohmann-json:x64-windows zlib:x64-windows
+          $env:VCPKG_ROOT="${{ github.workspace }}\vcpkg"
+          $VCPKG\vcpkg.exe install --triplet x64-windows `
+            ixwebsocket nlohmann-json zlib mbedtls
 
       - name: Configure CMake
         run: |
+          $vcpkgDir = "${{ github.workspace }}\vcpkg_installed\x64-windows"
           cmake -B build -S . `
-            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_installed/x64-windows/share/vcpkg/tools.cmake" `
+            "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_INSTALLED_DIR="$vcpkgDir" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: |
-          cmake --build build --config Release
+        run: cmake --build build --config Release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MoeKoeTaskbarLyrics-v0.3.1
+          name: MoeKoeTaskbarLyrics-x64
           path: |
             build/Release/MoeKoeTaskbarLyrics.exe
             build/Release/WebView2Loader.dll
