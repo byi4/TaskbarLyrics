@@ -147,8 +147,19 @@ LyricsData ParseKrc(const std::string& krcText) {
         }
 
         lyricLine.text = fullText;
+
+        // 限制单行字符数，防止 DoS
+        if (lyricLine.characters.size() > constants::MAX_CHARS_PER_LINE) {
+            lyricLine.characters.resize(constants::MAX_CHARS_PER_LINE);
+        }
+
         data.lines.push_back(std::move(lyricLine));
         ++parsedLines;
+
+        // 限制歌词总行数，防止内存耗尽
+        if (data.lines.size() >= constants::MAX_LYRIC_LINES) {
+            break;
+        }
     }
 
     data.valid = !data.lines.empty();
@@ -402,12 +413,18 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
             // 只有 lyricsData 是数组格式时才解析 JSON 行
             // KRC 格式已经在上面 ParseKrc 中处理完毕，跳过此循环
             for (const auto& lineJson : lyricsArray) {
+                // 限制歌词总行数
+                if (data.lines.size() >= constants::MAX_LYRIC_LINES) break;
+
                 LyricLine line;
                 line.text       = lineJson.value("text",       "");
                 line.translated = lineJson.value("translated", "");
 
                 if (lineJson.contains("characters") && lineJson["characters"].is_array()) {
                     for (const auto& c : lineJson["characters"]) {
+                        // 限制单行字符数
+                        if (line.characters.size() >= constants::MAX_CHARS_PER_LINE) break;
+
                         CharacterTiming ct;
                         ct.ch        = c.value("char",      "");
                         ct.startTime = c.value("startTime", static_cast<int64_t>(0));

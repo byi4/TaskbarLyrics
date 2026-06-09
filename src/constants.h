@@ -158,6 +158,12 @@ constexpr int WS_CONNECT_TIMEOUT_ITERATIONS = 50;
 /// 正常歌词 JSON 数据通常 < 100KB
 constexpr size_t MAX_WS_MESSAGE_SIZE = 1024 * 1024; // 1 MB
 
+/// 歌词最大行数限制（防止 DoS）
+constexpr size_t MAX_LYRIC_LINES = 10000;
+
+/// 单行歌词最大字符数限制（防止 DoS）
+constexpr size_t MAX_CHARS_PER_LINE = 1000;
+
 // ═══════════════════════════════════════
 // 线程退出超时
 // ═══════════════════════════════════════

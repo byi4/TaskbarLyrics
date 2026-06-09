@@ -16,11 +16,10 @@ namespace moekoe {
 
 namespace {
 void DebugLog(const char* /*fmt*/, ...) {
-    // 日志已在 main.cpp 中集中处理，这里不做任何操作
-    // 避免硬编码用户特定路径
+    // 日志已在 main.cpp 中集中处理
 }
 
-// 发送 HTTP 响应
+// 发送 HTTP 响应（CORS 仅允许 localhost）
 void SendResponse(SOCKET client, int statusCode, const char* statusText,
                   const char* contentType, const char* body) {
     char header[512];
@@ -28,20 +27,40 @@ void SendResponse(SOCKET client, int statusCode, const char* statusText,
     int n = snprintf(header, sizeof(header),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+        "Access-Control-Allow-Origin: http://127.0.0.1:%d\r\n"
+        "Access-Control-Allow-Methods: GET, POST\r\n"
         "Access-Control-Allow-Headers: Content-Type\r\n"
         "Content-Length: %d\r\n"
         "Connection: close\r\n"
         "\r\n",
-        statusCode, statusText, contentType, bodyLen);
+        statusCode, statusText, contentType,
+        moekoe::constants::HTTP_SERVER_PORT, bodyLen);
     send(client, header, n, 0);
     send(client, body, bodyLen, 0);
 }
 
+// 严格验证 POST 命令：使用 JSON 白名单而非子字符串匹配
+bool IsValidShutdownCommand(const std::string& bodyStr) {
+    // 期望格式: {"type":"control","data":{"command":"shutdown"}}
+    // 或简化格式: {"command":"shutdown"}
+    // 使用简单手写解析，避免引入 nlohmann/json 依赖到 http_server
+
+    // 查找 "command" 键
+    const char* cmdKey = strstr(bodyStr.c_str(), "\"command\"");
+    if (!cmdKey) return false;
+
+    // 跳过 "command" 和可能的空白/冒号
+    const char* p = cmdKey + 9; // strlen("\"command\"")
+    while (*p == ' ' || *p == ':' || *p == '\t') ++p;
+
+    // 期望值是 "shutdown"（严格匹配）
+    if (strncmp(p, "\"shutdown\"", 10) == 0) return true;
+
+    return false;
+}
+
 // 解析请求行中的路径（简化版，只取第一行）
 std::string ExtractPath(const char* request, size_t len) {
-    // 找到第一个空格后的路径
     const char* start = strchr(request, ' ');
     if (!start) return "/";
     ++start;
@@ -176,10 +195,7 @@ void HttpServer::ServerLoop(int port) {
                  method.c_str(), path.c_str(), totalLen);
 
         // 路由处理
-        if (method == "OPTIONS") {
-            // CORS 预检
-            SendResponse(client, 200, "OK", "text/plain", "");
-        } else if (method == "GET" && path == "/ping") {
+        if (method == "GET" && path == "/ping") {
             SendResponse(client, 200, "OK", "application/json",
                          "{\"status\":\"ok\",\"service\":\"MoeKoeTaskbarLyrics\"}");
         } else if (method == "POST" && (path == "/" || path == "/shutdown")) {
@@ -187,13 +203,11 @@ void HttpServer::ServerLoop(int port) {
             const char* body = strstr(buffer, "\r\n\r\n");
             if (body) {
                 body += 4;
-                DebugLog("[HTTP] POST body: %.200s\n", body);
-
-                // 简单解析：查找 "command":"shutdown" 或类似模式
                 std::string bodyStr(body);
-                if (bodyStr.find("\"shutdown\"") != std::string::npos ||
-                    bodyStr.find("shutdown") != std::string::npos) {
-                    DebugLog("[HTTP] Received shutdown command\n");
+
+                // 严格验证命令（白名单匹配，非子字符串）
+                if (IsValidShutdownCommand(bodyStr)) {
+                    DebugLog("[HTTP] Received valid shutdown command\n");
                     SendResponse(client, 200, "OK", "application/json",
                                  "{\"status\":\"shutting_down\"}");
 
@@ -201,8 +215,8 @@ void HttpServer::ServerLoop(int port) {
                         onCommand_("shutdown");
                     }
                 } else {
-                    SendResponse(client, 200, "OK", "application/json",
-                                 "{\"status\":\"received\"}");
+                    SendResponse(client, 400, "Bad Request", "application/json",
+                                 "{\"error\":\"invalid command\"}");
                 }
             } else {
                 SendResponse(client, 400, "Bad Request", "application/json",

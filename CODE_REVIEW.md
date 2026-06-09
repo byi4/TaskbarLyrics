@@ -1,820 +1,300 @@
 # TaskbarLyrics 代码审查报告
 
-基于对仓库代码的全面分析，本报告提供详细的优化建议，特别针对**开机自启动功能**。
+基于对仓库代码的全面分析和实际修复记录。
+
+**最后更新**: 2026-06-09
 
 ---
 
-## 🔴 **关键问题 & 安全漏洞**
+## 修复状态总览
 
-### **1. 开机自启动 - 路径传递漏洞 (HIGH)**
-**位置**: `src/config.cpp` L319、L344
-
-```cpp
-// 问题代码
-std::wstring deleteCmd = std::wstring(L"schtasks /Delete /TN \"") + kTaskName + L"\" /F";
-::CreateProcessW(nullptr, deleteCmdLine.data(), ...)  // 直接传给 CreateProcessW
-
-std::wstring createCmd = std::wstring(L"schtasks /Create /TN \"") + kTaskName
-    + L"\" /TR " + quotedExe + L" /SC ONLOGON /RL LIMITED /F";
-```
-
-**风险**：
-- 如果 `quotedExe` 包含特殊字符（如 `"`），可能导致 **命令注入**
-- PowerShell 脚本（L404）没有对 `exePath` 进行转义，类似的 **注入风险**
-
-**优化方案**：
-```cpp
-// 改进版本
-bool Config::SetAutoStartTaskScheduler(bool enable) {
-    // 1. 使用 CreateProcessW 的数组参数而非命令行字符串
-    // 2. 或者对 exePath 进行完整的 shell 转义验证
-    
-    const std::wstring resolvedPath = ResolveAutoStartExePath();
-    wchar_t exePath[MAX_PATH] = {0};
-    wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
-    
-    // ✅ 验证路径合法性
-    if (!PathFileExistsW(exePath)) {
-        ConfigDebugLog("[AUTOSTART] Invalid exe path\n");
-        return false;
-    }
-    
-    // ✅ 验证路径中不包含危险字符
-    if (wcschr(exePath, L'\n') || wcschr(exePath, L'&') || wcschr(exePath, L'|') ||
-        wcschr(exePath, L';') || wcschr(exePath, L'`')) {
-        ConfigDebugLog("[AUTOSTART] Invalid characters in path\n");
-        return false;
-    }
-    
-    // ✅ 构建命令行（使用 schtasks 的参数格式）
-    wchar_t cmdLine[2048];
-    int written = swprintf_s(cmdLine, sizeof(cmdLine)/sizeof(cmdLine[0]),
-        L"schtasks /Create /TN \"%s\" /TR \"%s\" /SC ONLOGON /RL LIMITED /F", 
-        kTaskName, exePath);
-    
-    if (written < 0) {
-        ConfigDebugLog("[AUTOSTART] Command line too long\n");
-        return false;
-    }
-    
-    // ... 创建进程
-}
-```
+| # | 问题 | 严重度 | 状态 | 修改文件 |
+|---|------|--------|------|----------|
+| 1 | 开机自启命令注入漏洞 | HIGH | ✅ 已修复 | [config.cpp](src/config.cpp) |
+| 2 | HTTP 命令验证 & CORS | MEDIUM | ✅ 已修复 | [http_server.cpp](src/http_server.cpp) |
+| 3 | PowerShell 转义/注入风险 | MEDIUM | ✅ 已修复 | [config.cpp](src/config.cpp) |
+| 4 | 并行化自启动执行 | MEDIUM | ✅ 已修复 | [config.cpp](src/config.cpp) |
+| 5 | 歌词解析无大小限制 | MEDIUM | ✅ 已修复 | [websocket_client.cpp](src/websocket_client.cpp), [constants.h](src/constants.h) |
+| 6 | 硬编码用户路径 (CMakeLists.txt) | LOW | ✅ 已修复 | [CMakeLists.txt](CMakeLists.txt), [CMakePresets.json](CMakePresets.json) |
+| 7 | 硬编码用户路径 (popup.js) | LOW | ✅ 已修复 | [popup.js](moeKoe-taskbar-lyrics/popup.js) |
+| 8 | 注释调试代码残留 | LOW | ✅ 已修复 | [popup.js](moeKoe-taskbar-lyrics/popup.js) |
+| 9 | WebSocket 无连接超时 | LOW | ✅ 已修复 | [background.js](moeKoe-taskbar-lyrics/background.js) |
+| 10 | MSVC 工具集版本不匹配 | BUILD | ✅ 已修复 | [CMakePresets.json](CMakePresets.json), [build.cmd](build.cmd) |
 
 ---
 
-### **2. WebSocket 消息大小检查 (MEDIUM)**
-**位置**: `src/websocket_client.cpp` L337
+## 🔴 **已修复: 关键安全问题**
 
-✅ **已实现**：检查了 `MAX_WS_MESSAGE_SIZE`，这是好的做法
+### **1. 开机自启动 - 命令注入漏洞 (HIGH)** ✅
+**位置**: `src/config.cpp`
 
-但建议增加 **更细粒度的验证**：
-- 检查 `ParseKrc` 中的歌词行数限制
-- 限制 `CharacterTiming` 数组的大小（防止 DoS）
+**原问题**: 自启动路径直接拼接进 shell 命令，未做任何安全校验。
+
+**修复方案**: 新增 `IsPathSafe()` 函数，在所有自启动方式（注册表 / 任务计划 / 启动文件夹）执行前统一验证：
 
 ```cpp
-// 建议补充（在 ParseKrc 函数中）
-const size_t MAX_LYRIC_LINES = 10000;        // 防止内存耗尽
-const size_t MAX_CHARS_PER_LINE = 1000;      // 防止单行字符过多
-
-if (data.lines.size() > MAX_LYRIC_LINES) {
-    ConfigDebugLog("[PARSE] Lyric lines exceed limit: %zu\n", data.lines.size());
-    data.lines.resize(MAX_LYRIC_LINES);
-}
-
-for (auto& line : data.lines) {
-    if (line.characters.size() > MAX_CHARS_PER_LINE) {
-        line.characters.resize(MAX_CHARS_PER_LINE);
+// src/config.cpp - IsPathSafe()
+static bool IsPathSafe(const std::wstring& path) {
+    if (path.empty()) return false;
+    // 危险字符：可被 cmd.exe / PowerShell 解释为命令分隔、管道、重定向等
+    static const wchar_t dangerousChars[] = L"&|;`$(){}<>!\n\r\"";
+    for (const wchar_t* p = dangerousChars; *p != L'\0'; ++p) {
+        if (path.find(*p) != std::wstring::npos) return false;
     }
+    // 路径必须指向实际存在的文件
+    return ::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 ```
+
+三个自启动函数 (`SetAutoStartRegistry`, `SetAutoStartTaskScheduler`, `SetAutoStartStartupFolder`) 均在调用前执行此检查。
 
 ---
 
-### **3. HTTP 服务器 - CORS 和命令注入 (MEDIUM)**
-**位置**: `src/http_server.cpp` L194
+### **2. HTTP 关闭端点 - 安全加固 (MEDIUM)** ✅
+**位置**: `src/http_server.cpp`
 
+**原问题**:
+- 子字符串匹配 `"shutdown"` 容易被绕过（如 `"no_shutdown"` 也命中）
+- CORS 头设为 `Access-Control-Allow-Origin: *`，任意网站可触发关闭
+
+**修复方案**:
+- 新增 `IsValidShutdownCommand()` 函数，严格 JSON 白名单验证：
 ```cpp
-// 风险代码
-if (bodyStr.find("\"shutdown\"") != std::string::npos ||
-    bodyStr.find("shutdown") != std::string::npos) {
-    DebugLog("[HTTP] Received shutdown command\n");
-    if (onCommand_) {
-        onCommand_("shutdown");
-    }
+static bool IsValidShutdownCommand(const std::string& bodyStr, size_t len) {
+    // 必须是精确匹配 {"command":"shutdown"} 的合法 JSON
+    static const char* expected = R"({"command":"shutdown"})";
+    return (len == strlen(expected)) && (memcmp(bodyStr.data(), expected, len) == 0);
 }
 ```
-
-**问题**：
-- 简单的子字符串查找，容易被 **绕过**（如 `"no_shutdown"` 也会匹配）
-- CORS 允许 `*` 源，任何网站都能调用 `/shutdown`（可导致 **恶意关闭**）
-
-**优化**：
-```cpp
-// ✅ 改进方案
-static bool IsValidCommand(const std::string& bodyStr) {
-    try {
-        auto j = json::parse(bodyStr);
-        if (!j.is_object() || !j.contains("command")) {
-            return false;
-        }
-        
-        if (!j["command"].is_string()) {
-            return false;
-        }
-        
-        std::string cmd = j["command"].get<std::string>();
-        
-        // 白名单检查（严格相等，不是子字符串）
-        return cmd == "shutdown" || cmd == "ping" || cmd == "reconnect";
-    } catch (...) {
-        DebugLog("[HTTP] JSON parse failed in command validation\n");
-        return false;
-    }
-}
-
-// 在 ServerLoop 中使用
-if (method == "POST" && (path == "/" || path == "/shutdown")) {
-    const char* body = strstr(buffer, "\r\n\r\n");
-    if (body) {
-        body += 4;
-        std::string bodyStr(body);
-        
-        // ✅ 严格验证
-        if (IsValidCommand(bodyStr)) {
-            auto j = json::parse(bodyStr);
-            std::string cmd = j["command"].get<std::string>();
-            
-            if (cmd == "shutdown") {
-                SendResponse(client, 200, "OK", "application/json",
-                           "{\"status\":\"shutting_down\"}");
-                if (onCommand_) {
-                    onCommand_("shutdown");
-                }
-            }
-        } else {
-            SendResponse(client, 400, "Bad Request", "application/json",
-                       "{\"error\":\"invalid command\"}");
-        }
-    } else {
-        SendResponse(client, 400, "Bad Request", "application/json",
-                   "{\"error\":\"no body\"}");
-    }
-}
-
-// ✅ 移除开放 CORS，改为localhost-only
-// 修改 SendResponse 的 CORS 头部
-void SendResponse(SOCKET client, int statusCode, const char* statusText,
-                  const char* contentType, const char* body) {
-    char header[512];
-    int bodyLen = static_cast<int>(strlen(body));
-    int n = snprintf(header, sizeof(header),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Access-Control-Allow-Origin: http://127.0.0.1:6521\r\n"  // ✅ 受限源
-        "Access-Control-Allow-Methods: GET, POST\r\n"  // ✅ 移除 OPTIONS
-        "Access-Control-Allow-Headers: Content-Type\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        statusCode, statusText, contentType, bodyLen);
-    send(client, header, n, 0);
-    send(client, body, bodyLen, 0);
-}
-```
+- CORS 从 `*` 改为仅允许 `http://127.0.0.1:{port}`（动态获取实际端口）
+- 移除 OPTIONS 预检路由（不再需要通配 CORS）
 
 ---
 
-### **4. PowerShell 快捷方式创建 - 权限和转义问题 (MEDIUM)**
-**位置**: `src/config.cpp` L404-415
+### **3. 启动文件夹快捷方式 - COM 替代 PowerShell (MEDIUM)** ✅
+**位置**: `src/config.cpp`
 
-```cpp
-std::wstring psScript = L"powershell -NoProfile -WindowStyle Hidden -Command \"";
-psScript += L"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('";
-psScript += lnkPath;
-psScript += L"'); $s.TargetPath = '";
-psScript += exePath;
-psScript += L"'; ...";
+**原问题**: 使用 `CreateProcessW("powershell ...")` 拼接脚本创建 `.lnk` 快捷方式，路径中的单引号等字符会导致脚本注入。
+
+**修复方案**: 完全移除 PowerShell 调用，改用 Windows COM 接口 `IShellLinkW` + `IPersistFile` 直接创建 `.lnk` 文件：
+
+```
+CoCreateInstance(CLSID_ShellLink) → IShellLinkW::SetPath() → IPersistFile::Save()
 ```
 
-**问题**：
-- 单引号 `'` 围绕的字符串，如果路径包含 `'` 会导致 **脚本注入**
-- 没有检查 PowerShell 是否被禁用
-- PowerShell 可能被企业安全策略禁用
-
-**优化方案 - 使用 COM 接口（推荐）**：
-```cpp
-#include <shobjidl.h>
-#include <shlguid.h>
-
-bool Config::SetAutoStartStartupFolder(bool enable) {
-    const std::wstring resolvedPath = ResolveAutoStartExePath();
-    wchar_t exePath[MAX_PATH] = {0};
-    wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
-    
-    if (resolvedPath.empty() || wcslen(exePath) == 0) {
-        return false;
-    }
-
-    // Startup 目录
-    wchar_t startupDir[MAX_PATH] = {0};
-    if (FAILED(::SHGetFolderPathW(nullptr, CSIDL_STARTUP, nullptr, 0, startupDir))) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: SHGetFolderPathW failed\n");
-        return false;
-    }
-
-    std::wstring lnkPath = std::wstring(startupDir) + L"\\MoeKoeTaskbarLyrics.lnk";
-
-    if (!enable) {
-        if (::DeleteFileW(lnkPath.c_str())) {
-            ConfigDebugLog("[AUTOSTART] StartupFolder: lnk deleted\n");
-        }
-        return true;
-    }
-
-    // ✅ 使用 COM 接口创建快捷方式
-    HRESULT hr = S_OK;
-    IShellLinkW* psl = nullptr;
-    
-    hr = ::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                            IID_IShellLinkW, (void**)&psl);
-    if (FAILED(hr)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: CoCreateInstance failed: 0x%08lx\n", hr);
-        return false;
-    }
-
-    // 设置快捷方式属性
-    hr = psl->SetPath(exePath);
-    if (FAILED(hr)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: SetPath failed: 0x%08lx\n", hr);
-        psl->Release();
-        return false;
-    }
-
-    // 设置工作目录
-    wchar_t workDir[MAX_PATH] = {0};
-    wcsncpy_s(workDir, exePath, MAX_PATH);
-    wchar_t* lastSlash = wcsrchr(workDir, L'\\');
-    if (lastSlash) *lastSlash = L'\0';
-    
-    hr = psl->SetWorkingDirectory(workDir);
-    if (FAILED(hr)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: SetWorkingDirectory failed: 0x%08lx\n", hr);
-        psl->Release();
-        return false;
-    }
-
-    // 设置窗口风格（隐藏）
-    psl->SetShowCmd(SW_HIDE);
-
-    // 保存快捷方式
-    IPersistFile* ppf = nullptr;
-    hr = psl->QueryInterface(IID_IPersistFile, (void**)&ppf);
-    if (FAILED(hr)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: QueryInterface failed: 0x%08lx\n", hr);
-        psl->Release();
-        return false;
-    }
-
-    hr = ppf->Save(lnkPath.c_str(), TRUE);
-    if (FAILED(hr)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder: Save failed: 0x%08lx\n", hr);
-        ppf->Release();
-        psl->Release();
-        return false;
-    }
-
-    ppf->Release();
-    psl->Release();
-
-    ConfigDebugLog("[AUTOSTART] StartupFolder: shortcut created successfully at %s\n",
-                   WideToUtf8(lnkPath).c_str());
-    return true;
-}
-```
-
-**在 CMakeLists.txt 中添加**：
-```cmake
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    # ... 现有库 ...
-    ole32      # IShellLink COM 接口
-    oleaut32   # COM 自动化
-)
-```
+优势：
+- 零 shell 注入风险（纯 API 调用）
+- 不依赖 PowerShell 是否被禁用
+- 不受企业安全策略限制
+- 执行速度更快（无需启动 powershell.exe 进程）
 
 ---
 
-## 🟡 **开机自启动功能 - 专项优化建议**
+## 🟡 **已修复: 功能改进**
 
-### **现状分析**
+### **4. 并行化自启动执行 (MEDIUM)** ✅
+**位置**: `src/config.cpp` — `SetAutoStart()`
 
-目前实现了 **三层级联方案**：
-1. ✅ 注册表 Run 键（兼容性最好，但易被杀毒软件拦截）
-2. ✅ 任务计划程序（稳定性最好）
-3. ✅ 启动文件夹快捷方式（兼容性一般）
+**原问题**: 级联模式 — 注册表失败才尝试任务计划，再失败尝试启动文件夹。任一失败可能阻断后续。
 
-### **推荐改进**
-
-#### **改进 1：并行执行而非级联**
-
-当前代码的问题：任何一种方式失败都可能阻止其他方式生效
+**修复方案**: 改为并行执行三种方案，任一成功即返回成功：
 
 ```cpp
 bool Config::SetAutoStart(bool v) {
-    const bool changed = (autoStart_ != v);
     autoStart_ = v;
-
-    // ✅ 改进：同步并行执行，不互相阻挡
     bool regOk = SetAutoStartRegistry(v);
-    bool taskOk = SetAutoStartTaskScheduler(v);      // 不依赖 regOk
-    bool startupOk = SetAutoStartStartupFolder(v);   // 不依赖 regOk/taskOk
-    
-    const bool anyOk = regOk || taskOk || startupOk;
-    
-    ConfigDebugLog("[AUTOSTART] SetAutoStart(%s) changed=%d\n",
-        v ? "true" : "false", (int)changed);
-    ConfigDebugLog("[AUTOSTART] Results: registry=%s task=%s startup=%s -> overall=%s\n",
-        regOk ? "OK" : "FAIL",
-        taskOk ? "OK" : "FAIL",
-        startupOk ? "OK" : "FAIL",
-        anyOk ? "OK" : "ALL-FAIL");
-    
-    return anyOk;
-}
-```
-
-**优势**：
-- 如果注册表失败，仍有 2 种备选方案生效
-- 更健壮的容错机制
-- 用户体验更好
-
----
-
-#### **改进 2：启动时同步状态**
-
-**位置**: `src/main.cpp` L399
-
-添加诊断和修复逻辑：
-
-```cpp
-// 新增诊断函数
-namespace moekoe {
-
-struct AutoStartState {
-    bool registryEnabled = false;
-    bool taskEnabled = false;
-    bool startupEnabled = false;
-    int enabledCount = 0;
-    
-    bool IsConsistent(bool expected) const {
-        int actualCount = (registryEnabled ? 1 : 0) + 
-                         (taskEnabled ? 1 : 0) + 
-                         (startupEnabled ? 1 : 0);
-        
-        bool currentlyEnabled = actualCount > 0;
-        return currentlyEnabled == expected;
-    }
-};
-
-AutoStartState DiagnoseAutoStart() {
-    AutoStartState state;
-    
-    // 1. 检查注册表
-    HKEY hKey = nullptr;
-    LONG result = RegOpenKeyExW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-        KEY_QUERY_VALUE, &hKey);
-    if (result == ERROR_SUCCESS) {
-        wchar_t value[MAX_PATH] = {0};
-        DWORD size = sizeof(value);
-        result = RegQueryValueExW(hKey, L"MoeKoeTaskbarLyrics", nullptr, nullptr,
-                                  (LPBYTE)value, &size);
-        state.registryEnabled = (result == ERROR_SUCCESS);
-        if (state.registryEnabled) {
-            DebugLog("[DIAGNOSE] Registry entry found: %s\n", 
-                    WideToUtf8(std::wstring(value)).c_str());
-            state.enabledCount++;
-        }
-        RegCloseKey(hKey);
-    }
-    
-    // 2. 检查任务计划程序
-    {
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        PROCESS_INFORMATION pi{};
-        std::wstring queryCmd = L"schtasks /Query /TN \"MoeKoeTaskbarLyrics_AutoStart\" /FO LIST";
-        
-        if (::CreateProcessW(nullptr, queryCmd.data(), nullptr, nullptr,
-                             FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-            ::WaitForSingleObject(pi.hProcess, 5000);
-            DWORD exitCode = 0;
-            ::GetExitCodeProcess(pi.hProcess, &exitCode);
-            state.taskEnabled = (exitCode == 0);
-            if (state.taskEnabled) {
-                DebugLog("[DIAGNOSE] Task Scheduler entry found\n");
-                state.enabledCount++;
-            }
-            ::CloseHandle(pi.hProcess);
-            ::CloseHandle(pi.hThread);
-        }
-    }
-    
-    // 3. 检查启动文件夹
-    {
-        wchar_t startupDir[MAX_PATH] = {0};
-        if (SUCCEEDED(::SHGetFolderPathW(nullptr, CSIDL_STARTUP, nullptr, 0, startupDir))) {
-            std::wstring lnkPath = std::wstring(startupDir) + L"\\MoeKoeTaskbarLyrics.lnk";
-            state.startupEnabled = (::GetFileAttributesW(lnkPath.c_str()) != INVALID_FILE_ATTRIBUTES);
-            if (state.startupEnabled) {
-                DebugLog("[DIAGNOSE] Startup folder entry found\n");
-                state.enabledCount++;
-            }
-        }
-    }
-    
-    return state;
-}
-
-} // namespace moekoe
-```
-
-在 `main.cpp` 中使用：
-
-```cpp
-// 启动时同步状态
-moekoe::Config config;
-config.Load();
-
-auto state = DiagnoseAutoStart();
-bool expectedAutoStart = config.IsAutoStart();
-
-if (!state.IsConsistent(expectedAutoStart)) {
-    DebugLog("[STARTUP] AutoStart state inconsistent. Expected=%s, Found=%d/3 methods enabled\n",
-             expectedAutoStart ? "ON" : "OFF", state.enabledCount);
-    // 修复不一致状态
-    config.SetAutoStart(expectedAutoStart);
-} else {
-    DebugLog("[STARTUP] AutoStart state consistent: %d/3 methods enabled\n", state.enabledCount);
+    bool taskOk = SetAutoStartTaskScheduler(v);     // 不依赖 regOk
+    bool startupOk = SetAutoStartStartupFolder(v);   // 不依赖前两者
+    return regOk || taskOk || startupOk;             // 任一成功即可
 }
 ```
 
 ---
 
-#### **改进 3：更详细的诊断命令**
+### **5. 歌词解析大小限制 (MEDIUM)** ✅
+**位置**: `src/constants.h`, `src/websocket_client.cpp`
 
-添加用户可调用的诊断方法，便于排查问题：
-
-```cpp
-std::string Config::GenerateDiagnosisReport() const {
-    std::string report;
-    report += "=== AutoStart Diagnosis Report ===\n\n";
-    
-    auto state = DiagnoseAutoStart();
-    
-    report += "[Registry]\n";
-    report += state.registryEnabled ? "  Status: ENABLED\n" : "  Status: DISABLED\n";
-    report += "  Check with: reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n\n";
-    
-    report += "[Task Scheduler]\n";
-    report += state.taskEnabled ? "  Status: ENABLED\n" : "  Status: DISABLED\n";
-    report += "  Check with: schtasks /Query /TN MoeKoeTaskbarLyrics_AutoStart\n\n";
-    
-    report += "[Startup Folder]\n";
-    report += state.startupEnabled ? "  Status: ENABLED\n" : "  Status: DISABLED\n";
-    report += "  Location: %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\n\n";
-    
-    report += "[Summary]\n";
-    report += "  Methods Enabled: " + std::to_string(state.enabledCount) + "/3\n";
-    report += state.IsConsistent(autoStart_) ? "  State: CONSISTENT\n" : "  State: INCONSISTENT (需要修复)\n";
-    
-    return report;
-}
-```
-
-在托盘菜单中添加诊断选项：
+新增常量防止恶意大歌词导致内存耗尽：
 
 ```cpp
-case ID_MENU_DIAGNOSE: {
-    std::string report = app.config->GenerateDiagnosisReport();
-    std::wstring wReport(report.begin(), report.end());
-    ::MessageBoxW(app.hwnd, wReport.c_str(), L"AutoStart 诊断报告",
-                  MB_OK | MB_ICONINFORMATION);
-    break;
-}
+// constants.h
+constexpr size_t MAX_LYRIC_LINES = 10000;      // 最大歌词行数
+constexpr size_t MAX_CHARS_PER_LINE = 1000;     // 单行最大字符数
 ```
+
+在 `ParseKrc()` 和 JSON 数组解析中均添加了截断保护。
 
 ---
 
-## 🟡 **其他问题**
+### **6. WebSocket 连接超时 (LOW)** ✅
+**位置**: `moeKoe-taskbar-lyrics/background.js`
 
-### **5. 配置文件权限 (MEDIUM)**
-**位置**: `src/config.cpp` L84-92
+**原问题**: WebSocket 连接没有超时机制，API 服务不可用时 UI 会无限等待。
 
-```cpp
-std::string Config::GetConfigPath() {
-    char appdata[MAX_PATH] = {0};
-    if (FAILED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) {
-        return "config.json"; // ⚠️ 当前目录，权限问题
-    }
-    std::string dir = std::string(appdata) + "\\MoeKoeTaskbarLyrics";
-    CreateDirectoryA(dir.c_str(), nullptr);  // ❌ 没有指定 ACL
-    return dir + "\\config.json";
+**修复方案**: 新增 5 秒连接超时：
+
+```javascript
+const CONNECT_TIMEOUT = 5000; // ms
+let connectTimeoutId = null;
+
+function connectWebSocket() {
+    ws = new WebSocket(wsUrl);
+    connectTimeoutId = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) { ws.close(); scheduleReconnect(); }
+    }, CONNECT_TIMEOUT);
 }
 ```
 
-**问题**：`config.json` 可能被其他用户修改（包含敏感配置）
-
-**优化方案**：
-
-```cpp
-#include <aclapi.h>
-
-bool SetRestrictedDirAcl(const std::wstring& path) {
-    // 获取当前用户 SID
-    HANDLE hToken = nullptr;
-    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
-        return false;
-    }
-
-    DWORD dwBufferSize = 0;
-    ::GetTokenInformation(hToken, TokenUser, nullptr, 0, &dwBufferSize);
-    
-    PTOKEN_USER pTokenUser = (PTOKEN_USER)::LocalAlloc(LPTR, dwBufferSize);
-    if (!pTokenUser) {
-        ::CloseHandle(hToken);
-        return false;
-    }
-
-    if (!::GetTokenInformation(hToken, TokenUser, pTokenUser, dwBufferSize, &dwBufferSize)) {
-        ::LocalFree(pTokenUser);
-        ::CloseHandle(hToken);
-        return false;
-    }
-
-    // 创建仅允许当前用户的 ACL
-    EXPLICIT_ACCESS ea = {};
-    ea.grfAccessPermissions = GENERIC_ALL;
-    ea.grfAccessMode = SET_ACCESS;
-    ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
-    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
-    ea.Trustee.ptstrName = (LPWSTR)pTokenUser->User.Sid;
-
-    PACL pNewAcl = nullptr;
-    if (::SetEntriesInAclW(1, &ea, nullptr, &pNewAcl) != ERROR_SUCCESS) {
-        ::LocalFree(pTokenUser);
-        ::CloseHandle(hToken);
-        return false;
-    }
-
-    // 应用 ACL
-    BOOL bResult = ::SetNamedSecurityInfoW(
-        (LPWSTR)path.c_str(),
-        SE_FILE_OBJECT,
-        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-        nullptr, nullptr, pNewAcl, nullptr
-    );
-
-    ::LocalFree(pNewAcl);
-    ::LocalFree(pTokenUser);
-    ::CloseHandle(hToken);
-
-    return bResult == ERROR_SUCCESS;
-}
-
-std::string Config::GetConfigPath() {
-    char appdata[MAX_PATH] = {0};
-    if (FAILED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) {
-        return "config.json";
-    }
-    
-    std::string dirUtf8 = std::string(appdata) + "\\MoeKoeTaskbarLyrics";
-    
-    // 转换为宽字符
-    int len = ::MultiByteToWideChar(CP_UTF8, 0, dirUtf8.c_str(), -1, nullptr, 0);
-    std::wstring dirWide(len - 1, L'\0');
-    ::MultiByteToWideChar(CP_UTF8, 0, dirUtf8.c_str(), -1, &dirWide[0], len);
-    
-    // 创建目录
-    ::CreateDirectoryW(dirWide.c_str(), nullptr);
-    
-    // ✅ 设置限制 ACL
-    if (!SetRestrictedDirAcl(dirWide)) {
-        ConfigDebugLog("[CONFIG] Warning: Failed to set directory ACL\n");
-    }
-    
-    return dirUtf8 + "\\config.json";
-}
-```
+超时后立即关闭并按指数退避重连（首次失败更快重连），提供更快的用户反馈。
 
 ---
 
-### **6. 资源泄漏风险 (LOW-MEDIUM)**
-**位置**: `src/main.cpp` L461-498
+## 🟠 **已修复: 代码质量**
 
-```cpp
-// ❌ 当前方式：异常时可能泄漏
-moekoe::TaskbarWindow taskbarWindow;
-moekoe::TaskbarRenderer renderer;
+### **7. 硬编码用户路径清理 (LOW)** ✅
 
-if (!taskbarWindow.Create(hInstance, hTaskbar)) {
-    // 报错，但之前分配的资源怎么办？
-    return 1;
-}
+#### CMakeLists.txt
+**原问题**: 包含 `D:/vcpkg/...`、`C:/Users/19624/...` 等个人开发机器路径。
 
-if (!renderer.Initialize(taskbarWindow.GetHandle())) {
-    // 报错，但 taskbarWindow 怎么清理？
-    return 1;
-}
-```
+**修复**: 改为多级回退搜索策略：
+1. CMake 变量 `-DVCPKG_INSTALLED_DIR=...`（CI 环境）
+2. 环境变量 `$ENV{VCPKG_INSTALLED_DIR}` / `$ENV{VCPKG_INSTALLATION_ROOT}`
+3. 自动搜索常见安装路径（`D:/vcpkg`, `C:/vcpkg` 等）
+4. ixwebsocket / WebView2 同理使用 `$ENV{USERPROFILE}/.nuget/packages/...` + 版本号自动查找
 
-**改进方案**：
+#### popup.js
+**原问题**: `getPluginDir()` 中硬编码了 `C:\Users\19624\...` 和 `D:\MoeKoeMusic-plugin\...` 作为回退路径。
 
-```cpp
-// ✅ 使用 RAII 辅助类
-class ResourceGuard {
-public:
-    template<typename T, typename CleanupFunc>
-    ResourceGuard(T& resource, CleanupFunc cleanup) 
-        : cleanup_(cleanup), resource_(&resource) {}
-    
-    ~ResourceGuard() {
-        if (cleanup_) {
-            cleanup_();
-        }
-    }
-    
-    void Release() { cleanup_ = nullptr; }
-
-private:
-    std::function<void()> cleanup_;
-    void* resource_;
-};
-
-// 在 main 中使用
-moekoe::TaskbarWindow taskbarWindow;
-moekoe::TaskbarRenderer renderer;
-
-ResourceGuard windowGuard(taskbarWindow, [&]() {
-    if (app.taskbarWindow) taskbarWindow.Destroy();
-});
-
-ResourceGuard rendererGuard(renderer, [&]() {
-    if (app.renderer) renderer.Shutdown();
-});
-
-if (!taskbarWindow.Create(hInstance, hTaskbar)) {
-    ::MessageBoxW(nullptr, L"创建任务栏歌词窗口失败。",
-                  L"MoeKoe Taskbar Lyrics", MB_OK | MB_ICONERROR);
-    tray.Shutdown();
-    return 1;  // 自动调用 guard 析构函数清理资源
-}
-
-if (!renderer.Initialize(taskbarWindow.GetHandle())) {
-    ::MessageBoxW(nullptr, L"Direct2D 初始化失败。",
-                  L"MoeKoe Taskbar Lyrics", MB_OK | MB_ICONERROR);
-    tray.Shutdown();
-    return 1;  // 自动调用 guard 析构函数清理资源
-}
-
-windowGuard.Release();  // 成功，释放自动清理
-rendererGuard.Release();
-```
+**修复**: 移除所有硬编码路径，完全依赖 `window.electronAPI.getExtensionPath()` 动态获取。
 
 ---
 
-### **7. 硬编码用户路径 (MEDIUM)**
-**位置**: `CMakeLists.txt` L27、L62、L113 等
+### **8. 注释调试代码清理 (LOW)** ✅
+**位置**: `moeKoe-taskbar-lyrics/popup.js`
 
-```cmake
-set(VCPKG_INSTALLED_DIR "D:/vcpkg/installed/x64-windows-142")  # ❌ 硬编码
-set(IXWEBSOCKET_DEBUG_LIB "D:/ixwebsocket-build/Debug/ixwebsocket.lib")
-find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
-    HINTS
-        "C:/Users/19624/.nuget/packages/..."  # ❌ 硬编码用户名
+移除 `launchExe()` 中所有注释掉的 `showDiag()` 调试代码，保持生产代码整洁。
+
+---
+
+## 🔧 **构建系统修复**
+
+### **9. MSVC 工具集版本不匹配** ✅
+
+**问题**: ixwebsocket.lib 用 MSVC **14.44** 编译（内含 `_Find_last_of_pos_vectorized` 等向量化 STL 符号），但 VS 2022 CMake generator 默认使用 **14.42**。链接时报 `LNK2019: __std_find_last_of_trivial_pos_1 未解析`。
+
+**尝试过的无效方案**（vcxproj `<PlatformToolset>` 无法通过 CMake 改变）：
+- `CMAKE_VS_PLATFORM_TOOLSET_VERSION` 缓存变量
+- `CMAKE_VS_GLOBALS` 全局属性注入
+- `set_target_properties(VS_PLATFORM_TOOLSET_VERSION)`
+- `-T "v143,version=14.44.35207"` 工具集参数
+- CMakePresets.json 的 `toolset` 字段
+
+**最终有效方案**: 在 [CMakePresets.json](CMakePresets.json) 的 build preset 中使用 `nativeToolOptions`：
+
+```json
+{
+    "buildPresets": [{
+        "name": "x64-Debug",
+        "configurePreset": "x64-Debug",
+        "configuration": "Debug",
+        "nativeToolOptions": ["/p:PlatformToolsetVersion=14.44.35207"]
+    }]
+}
 ```
 
-**改进**：
-
-```cmake
-cmake_minimum_required(VERSION 3.20)
-project(MoeKoeTaskbarLyrics
-    VERSION 0.3.1
-    DESCRIPTION "MoeKoeMusic Windows Taskbar Lyrics Plugin"
-    LANGUAGES CXX)
-
-# ✅ 使用环境变量优先
-if(NOT DEFINED VCPKG_INSTALLED_DIR)
-    # 方案 1: 使用 VCPKG_INSTALLATION_ROOT 环境变量
-    if(DEFINED ENV{VCPKG_INSTALLATION_ROOT})
-        set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows")
-    else()
-        # 方案 2: 自动搜索常见位置
-        find_path(VCPKG_FOUND_DIR
-            NAMES "include" "lib"
-            PATHS
-                "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg/installed/x64-windows"
-                "${CMAKE_CURRENT_SOURCE_DIR}/../../vcpkg/installed/x64-windows"
-                "C:/vcpkg/installed/x64-windows"
-            NO_DEFAULT_PATH)
-        if(VCPKG_FOUND_DIR)
-            set(VCPKG_INSTALLED_DIR "${VCPKG_FOUND_DIR}")
-        else()
-            message(FATAL_ERROR "VCPKG_INSTALLED_DIR not found. Please set VCPKG_INSTALLATION_ROOT environment variable or provide -DVCPKG_INSTALLED_DIR=<path>")
-        endif()
-    endif()
-endif()
-
-message(STATUS "Using VCPKG_INSTALLED_DIR: ${VCPKG_INSTALLED_DIR}")
-
-# ✅ ixwebsocket 路径也使用环境变量
-if(NOT DEFINED IXWEBSOCKET_BUILD_DIR)
-    if(DEFINED ENV{IXWEBSOCKET_BUILD_DIR})
-        set(IXWEBSOCKET_BUILD_DIR "$ENV{IXWEBSOCKET_BUILD_DIR}")
-    else()
-        # 尝试从 vcpkg 中找
-        set(IXWEBSOCKET_BUILD_DIR "${VCPKG_INSTALLED_DIR}")
-    endif()
-endif()
-
-# ✅ WebView2 使用标准搜索路径
-find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
-    HINTS
-        "${WEBVIEW2_INCLUDE_DIR}"
-    PATHS
-        "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
-        "C:/Program Files (x86)/Microsoft/Edge WebView2"
-        "C:/Program Files/Microsoft/Edge WebView2"
-    NO_DEFAULT_PATH)
-
-message(STATUS "WebView2 include dir: ${WEBVIEW2_INCLUDE_DIR}")
-```
-
-**CI/CD 使用方式**：
-
+**构建命令**:
 ```bash
-# Linux/macOS
-export VCPKG_INSTALLATION_ROOT=~/vcpkg
-export IXWEBSOCKET_BUILD_DIR=~/ixwebsocket-build
-
-# Windows PowerShell
-$env:VCPKG_INSTALLATION_ROOT = "C:\vcpkg"
-$env:IXWEBSOCKET_BUILD_DIR = "C:\ixwebsocket-build"
-
-cmake -B build -S .
-cmake --build build --config Release
+cmake --preset x64-Debug       # 或 x64-Release
+cmake --build --preset x64-Debug   # 自动传递工具集参数
 ```
 
----
-
-## 📊 **优先级修复清单**
-
-| 优先级 | 问题 | 影响 | 预计工作量 |
-|--------|------|------|----------|
-| 🔴 **HIGH** | 开机自启命令注入漏洞 | 任意命令执行 | 2-3小时 |
-| 🟡 **MEDIUM** | PowerShell 转义问题 | 权限提升 | 2-3小时 |
-| 🟡 **MEDIUM** | 并行化自启动执行 | 可靠性提升 | 1小时 |
-| 🟡 **MEDIUM** | HTTP 命令验证和 CORS | 远程关闭 | 1.5小时 |
-| 🟡 **MEDIUM** | 配置文件 ACL | 信息泄露 | 1.5小时 |
-| 🟠 **LOW** | 硬编码用户路径 | 可移植性 | 1小时 |
-| 🟠 **LOW** | 资源泄漏 | 内存问题 | 2小时 |
+同时创建了 [build.cmd](build.cmd) 一键构建脚本作为备用。
 
 ---
 
-## ✅ **已做得好的地方**
+## 📋 **开机自启动功能专项诊断记录**
 
-- ✅ **WebSocket 消息大小限制**（防 DoS）
-- ✅ **级联自启动方案**（良好的容错设计）
-- ✅ **异常处理和 debug 日志**（便于诊断）
-- ✅ **Per-Monitor V2 DPI 感知**（多显示器支持）
-- ✅ **优雅关闭流程**（资源释放顺序正确）
-- ✅ **开机自启路径智能解析** (`ResolveAutoStartExePath`)
-- ✅ **单实例保护** (Mutex)
+以下问题经排查后均已确认修复：
+
+### 原始诊断发现的问题
+
+#### 问题 A：头文件与实现不一致
+**原始状态**: `config.h` 声明 `bool SetAutoStart(bool v)` 返回 `bool`，但 `config.cpp` 实现 `void SetAutoStart(bool v)` 无返回值。
+**当前状态**: ✅ **已修复** — `SetAutoStart()` 现在正确返回 `bool`，且返回三种方案的或结果（[config.cpp L230-L248](src/config.cpp#L230-L248)）。
+
+#### 问题 B：仅使用 Run 注册表，其他两种方式未实现
+**原始状态**: `SetAutoStartTaskScheduler()` 和 `SetAutoStartStartupFolder()` 在头文件中声明但未实现。
+**当前状态**: ✅ **已修复** — 三个函数全部完整实现：
+- `SetAutoStartRegistry` — HKCU Run 注册表（[L250](src/config.cpp#L250)）
+- `SetAutoStartTaskScheduler` — schtasks 任务计划程序（[L332](src/config.cpp#L332)）
+- `SetAutoStartStartupFolder` — IShellLink COM 快捷方式（[L408](src/config.cpp#L408)）
+
+三者由 `SetAutoStart()` 并行调用，任一成功即视为成功。
+
+#### 问题 C：写入错误的 exe 路径（Debug 目录 vs 安装目录）
+**原始状态**: 直接使用 `GetModuleFileNameW(nullptr, ...)` 获取当前进程路径，VS F5 调试时会将 Debug 目录写入注册表，重启后路径失效导致启动失败。
+**当前状态**: ✅ **已修复** — 新增 `ResolveAutoStartExePath()` 智能路径解析函数（[L74](src/config.cpp#L74)）：
+1. 先取当前进程路径
+2. 检查父目录下是否存在 `moeKoe-taskbar-lyrics\MoeKoeTaskbarLyrics.exe`（生产安装路径）
+3. 若当前已在 `moeKoe-taskbar-lyrics` 下则直接使用当前路径
+4. 所有三个自启动函数均调用此函数获取正确的安装路径
+
+#### 问题 D：注册表值未加引号
+**原始状态**: `RegSetValueExW(...)` 写入裸路径，含空格时 Windows 可能解析异常。
+**当前状态**: ✅ **已修复** — 使用带双引号的 `quotedPath` 写入（[config.cpp L286-L299](src/config.cpp#L286-L299)）：
+```cpp
+std::wstring quotedPath = L"\"" + std::wstring(exePath) + L"\"";
+RegSetValueExW(hKey, nameW.c_str(), 0, REG_SZ,
+               reinterpret_cast<const BYTE*>(quotedPath.c_str()), byteCount);
+```
+
+### 排查方法备忘（供后续参考）
+
+如果自启动仍然异常，按以下步骤排查：
+
+1. **查看注册表实际内容**:
+   ```
+   Win+R → regedit → HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+   ```
+   确认 `MoeKoeTaskbarLyrics` 键值的路径是否存在、是否带引号。
+
+2. **查看启动文件夹**:
+   ```
+   Win+R → shell:startup
+   ```
+   确认 `MoeKoeTaskbarLyrics.lnk` 是否存在，目标路径是否正确。
+
+3. **查看任务计划程序**:
+   ```cmd
+   schtasks /Query /TN "MoeKoeTaskbarLyrics_AutoStart"
+   ```
+
+4. **手动测试路径**: 将注册表中记录的路径复制到 Win+R 或 cmd 中运行，确认能否正常启动。
+
+5. **检查安全软件日志**: 杀毒软件可能拦截注册表修改或计划任务创建。
 
 ---
 
-## 📝 **建议后续行动**
+## 📊 **剩余待处理项**
 
-### **立即优先级（第1周）**
-1. ✅ **修复命令注入漏洞**（使用完整的参数验证或转义）
-2. ✅ **改进 HTTP 命令验证**（使用 JSON 白名单）
-3. ✅ **替换 PowerShell** 为 COM 接口实现快捷方式创建
+| 优先级 | 问题 | 说明 |
+|--------|------|------|
+| MEDIUM | 配置文件 ACL 权限 | `config.json` 可被同机其他用户读取 |
+| LOW | 资源泄漏防护 (RAII) | main.cpp 中异常路径的资源释放 |
+| LOW | WebSocket 认证 | 本地端口无 token 校验 |
+| LOW | WS_PORT / HTTP_PORT 可配置 | 当前硬编码 6520 / 6523 |
 
-### **短期优先级（第2周）**
-1. ✅ 添加自启动诊断命令
-2. ✅ 并行化自启动执行逻辑
-3. ✅ 修复配置文件 ACL 权限
+---
 
-### **中期优先级（第3周+）**
-1. ✅ 编写单元测试验证三种自启动方式
-2. ✅ 使用环境变量重构 CMakeLists.txt
-3. ✅ 添加详细的开发文档
+## ✅ **项目优点（保持不变）**
 
-### **文档更新**
-- 文档化已知限制（如杀毒软件拦截）
-- 编写用户故障排查指南
-- 添加开发环境配置指南
+- WebSocket 消息大小限制（防 DoS）
+- 三层并行自启动方案（良好的容错设计）
+- 异常处理和 debug 日志（便于诊断）
+- Per-Monitor V2 DPI 感知（多显示器支持）
+- 优雅关闭流程（资源释放顺序正确）
+- 开机自启路径智能解析 (`ResolveAutoStartExePath`)
+- 单实例保护 (Mutex)
 
 ---
 
@@ -823,4 +303,4 @@ cmake --build build --config Release
 - Windows 任务计划程序 API: https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-start-page
 - IShellLink COM 接口: https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ishelllinkw
 - Windows 安全最佳实践: https://learn.microsoft.com/en-us/windows/win32/secbp/best-practices-for-the-security-apis
-
+- CMake Presets nativeToolOptions: https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html#build-preset

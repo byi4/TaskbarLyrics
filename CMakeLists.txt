@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+
 project(MoeKoeTaskbarLyrics
     VERSION 0.2.0
     DESCRIPTION "MoeKoeMusic Windows Taskbar Lyrics Plugin"
@@ -6,7 +7,7 @@ project(MoeKoeTaskbarLyrics
 
 # ⚠️ 注意：不使用 vcpkg 的 CMAKE_TOOLCHAIN_FILE
 # 使用 vcpkg 工具链会导致 MSVC 工具集不匹配（14.44 vs 14.42）的链接错误
-# 因此我们直接指定 vcpkg 安装目录下的头文件和库文件路径
+# 因此直接指定 vcpkg 安装目录下的头文件和库文件路径
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,13 +25,43 @@ find_package(Threads REQUIRED)
 
 # ---- 手动配置 vcpkg 安装的第三方库（绕过 vcpkg 工具链） ----
 if(NOT DEFINED VCPKG_INSTALLED_DIR)
-    set(VCPKG_INSTALLED_DIR "D:/vcpkg/installed/x64-windows-142")
+    # 优先使用环境变量
+    if(DEFINED ENV{VCPKG_INSTALLED_DIR})
+        set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLED_DIR}")
+    elseif(DEFINED ENV{VCPKG_INSTALLATION_ROOT})
+        # 尝试 x64-windows 和 x64-windows-142 两个 triplet
+        if(EXISTS "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows-142")
+            set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows-142")
+        else()
+            set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows")
+        endif()
+    else()
+        # 自动搜索常见安装路径
+        find_path(_VCPKG_CANDIDATE
+            NAMES "include" "lib"
+            PATHS
+                "D:/vcpkg/installed/x64-windows-142"
+                "D:/vcpkg/installed/x64-windows"
+                "C:/vcpkg/installed/x64-windows-142"
+                "C:/vcpkg/installed/x64-windows"
+            NO_DEFAULT_PATH)
+        if(_VCPKG_CANDIDATE)
+            set(VCPKG_INSTALLED_DIR "${_VCPKG_CANDIDATE}")
+        endif()
+    endif()
 endif()
 
-# 确保目录存在
+# 如果仍未找到，给出明确提示而非直接报错
 if(NOT EXISTS "${VCPKG_INSTALLED_DIR}")
-    message(FATAL_ERROR "VCPKG_INSTALLED_DIR does not exist: ${VCPKG_INSTALLED_DIR}")
+    message(FATAL_ERROR
+        "VCPKG_INSTALLED_DIR does not exist: ${VCPKG_INSTALLED_DIR}\n"
+        "Please set it via one of:\n"
+        "  cmake -DVCPKG_INSTALLED_DIR=<path>\n"
+        "  set VCPKG_INSTALLED_DIR=<path>  (environment variable)\n"
+        "  set VCPKG_INSTALLATION_ROOT=<vcpkg_root>  (environment variable)")
 endif()
+
+message(STATUS "Using VCPKG_INSTALLED_DIR: ${VCPKG_INSTALLED_DIR}")
 
 # 1. ZLIB
 find_library(ZLIB_LIBRARY_RELEASE NAMES z zlib PATHS "${VCPKG_INSTALLED_DIR}/lib" NO_DEFAULT_PATH)
@@ -58,9 +89,17 @@ message(STATUS "Found mbedtls: ${MBEDTLS_LIBRARY}")
 message(STATUS "Found mbedx509: ${MBEDX509_LIBRARY}")
 message(STATUS "Found mbedcrypto: ${MBEDCRYPTO_LIBRARY}")
 
-# 3. ixwebsocket —— 使用手动用 MSVC 14.42 编译的版本（绕过 vcpkg 的 MSVC 14.44）
-set(IXWEBSOCKET_RELEASE_LIB "D:/ixwebsocket-build/Release/ixwebsocket.lib")
-set(IXWEBSOCKET_DEBUG_LIB "D:/ixwebsocket-build/Debug/ixwebsocket.lib")
+# 3. ixwebsocket —— 使用手动用 MSVC 编译的版本（绕过 vcpkg 的 MSVC 不匹配）
+if(NOT DEFINED IXWEBSOCKET_BUILD_DIR)
+    if(DEFINED ENV{IXWEBSOCKET_BUILD_DIR})
+        set(IXWEBSOCKET_BUILD_DIR "$ENV{IXWEBSOCKET_BUILD_DIR}")
+    else()
+        set(IXWEBSOCKET_BUILD_DIR "${VCPKG_INSTALLED_DIR}")
+    endif()
+endif()
+
+set(IXWEBSOCKET_RELEASE_LIB "${IXWEBSOCKET_BUILD_DIR}/Release/ixwebsocket.lib")
+set(IXWEBSOCKET_DEBUG_LIB "${IXWEBSOCKET_BUILD_DIR}/Debug/ixwebsocket.lib")
 
 if(EXISTS "${IXWEBSOCKET_RELEASE_LIB}")
     message(STATUS "Using manually built ixwebsocket (MSVC 14.42): ${IXWEBSOCKET_RELEASE_LIB}")
@@ -72,8 +111,11 @@ endif()
 if(EXISTS "${IXWEBSOCKET_DEBUG_LIB}")
     message(STATUS "Using manually built ixwebsocket Debug: ${IXWEBSOCKET_DEBUG_LIB}")
 else()
-    message(WARNING "ixwebsocket Debug lib not found at ${IXWEBSOCKET_DEBUG_LIB}. Debug builds may fail.")
+    message(WARNING "ixwebsocket Debug lib not found at ${IXWEBSOCKET_DEBUG_LIB}")
+    message(WARNING "  -> Forcing Release runtime (/MD) to match ixwebsocket.lib")
     set(IXWEBSOCKET_DEBUG_LIB "${IXWEBSOCKET_RELEASE_LIB}")
+    # Debug 库不存在时，强制项目使用 Release 运行时库以匹配 ixwebsocket
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "" FORCE)
 endif()
 
 find_path(IXWEBSOCKET_INCLUDE_DIR ixwebsocket/IXWebSocket.h
@@ -105,15 +147,32 @@ set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
 message(STATUS "Found nlohmann_json: ${NLOHMANN_JSON_INCLUDE_DIR}")
 
 # 6. WebView2 SDK（NuGet 包或系统安装）
-# 优先使用 CMake 变量指定的路径（CI 环境），再回退到常见安装路径
+# 优先使用 CMake 变量指定的路径（CI 环境），再回退到环境变量和常见安装路径
+# NuGet 包路径使用 $ENV{USERPROFILE} 避免硬编码用户名
 find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
     HINTS
         "${WEBVIEW2_INCLUDE_DIR}"
     PATHS
-        "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/include"
+        "$ENV{WEBVIEW2_INCLUDE_DIR}"
         "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
+        "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
         "C:/Program Files (x86)/Microsoft/Edge WebView2"
+        "C:/Program Files/Microsoft/Edge WebView2"
+    PATH_SUFFIXES "build/native/include"
     NO_DEFAULT_PATH)
+
+# 如果找到 NuGet 包根目录但没有子版本目录，尝试自动查找
+if(NOT WEBVIEW2_INCLUDE_DIR AND EXISTS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2")
+    file(GLOB _WEBVIEW2_VERSIONS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2/*")
+    if(_WEBVIEW2_VERSIONS)
+        list(SORT _WEBVIEW2_VERSIONS ORDER DESCENDING)
+        list(GET _WEBVIEW2_VERSIONS 0 _WEBVIEW2_LATEST)
+        if(EXISTS "${_WEBVIEW2_LATEST}/build/native/include/WebView2.h")
+            set(WEBVIEW2_INCLUDE_DIR "${_WEBVIEW2_LATEST}/build/native/include")
+        endif()
+    endif()
+endif()
+
 if(WEBVIEW2_INCLUDE_DIR)
     message(STATUS "Found WebView2: ${WEBVIEW2_INCLUDE_DIR}")
 else()
@@ -128,9 +187,26 @@ find_library(WEBVIEW2_LOADER_LIB
     HINTS
         "${WEBVIEW2_LOADER_DIR}"
     PATHS
-        "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/x64"
+        "$ENV{WEBVIEW2_LOADER_DIR}"
+        "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
+        "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
         "C:/Program Files (x86)/Microsoft/Edge WebView2"
+    PATH_SUFFIXES "build/native/x64"
     NO_DEFAULT_PATH)
+
+# 同样尝试自动查找 NuGet 版本目录
+if(NOT WEBVIEW2_LOADER_LIB AND EXISTS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2")
+    file(GLOB _WEBVIEW2_VERSIONS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2/*")
+    if(_WEBVIEW2_VERSIONS)
+        list(SORT _WEBVIEW2_VERSIONS ORDER DESCENDING)
+        list(GET _WEBVIEW2_VERSIONS 0 _WEBVIEW2_LATEST)
+        find_library(WEBVIEW2_LOADER_LIB
+            NAMES WebView2Loader.dll.lib WebView2Loader
+            PATHS "${_WEBVIEW2_LATEST}/build/native/x64"
+            NO_DEFAULT_PATH)
+    endif()
+endif()
+
 if(WEBVIEW2_LOADER_LIB)
     message(STATUS "Found WebView2Loader.lib: ${WEBVIEW2_LOADER_LIB}")
 else()
@@ -232,9 +308,11 @@ if(MSVC)
         # 回退：尝试常见安装路径
         find_file(WEBVIEW2_LOADER_DLL WebView2Loader.dll
             PATHS
-                "C:/Users/19624/.nuget/packages/microsoft.web.webview2/1.0.3856.49/build/native/x64"
+                "$ENV{WEBVIEW2_LOADER_DIR}"
                 "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
+                "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
                 "C:/Program Files (x86)/Microsoft/Edge WebView2"
+            PATH_SUFFIXES "build/native/x64"
             NO_DEFAULT_PATH)
         if(WEBVIEW2_LOADER_DLL)
             add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

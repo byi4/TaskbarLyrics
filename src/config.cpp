@@ -10,6 +10,7 @@
 #include <fstream>
 #include <algorithm>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <windows.h>
 
 namespace moekoe {
@@ -22,6 +23,48 @@ static std::string WideToUtf8(const std::wstring& ws) {
     std::string s(n - 1, '\0');
     WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, &s[0], n, nullptr, nullptr);
     return s;
+}
+
+namespace {
+
+void ConfigDebugLog(const char* fmt, ...) {
+    char modulePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    char* lastSlash = strrchr(modulePath, '\\');
+    if (lastSlash) *lastSlash = '\0';
+    std::string logPath = std::string(modulePath) + "\\debug.log";
+    FILE* f = fopen(logPath.c_str(), "a");
+    if (!f) return;
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fclose(f);
+}
+
+} // namespace
+
+// ── 验证路径安全性：防止命令注入 ──
+// 检查路径中是否包含可能被 shell 解释的危险字符
+static bool IsPathSafe(const std::wstring& path) {
+    if (path.empty()) return false;
+
+    // 危险字符：可被 cmd.exe / PowerShell 解释为命令分隔、管道、重定向等
+    static const wchar_t dangerousChars[] = L"&|;`$(){}<>!\n\r\"";
+    for (const wchar_t* p = dangerousChars; *p != L'\0'; ++p) {
+        if (path.find(*p) != std::wstring::npos) {
+            ConfigDebugLog("[AUTOSTART] Path contains dangerous char: 0x%04X\n", (unsigned int)*p);
+            return false;
+        }
+    }
+
+    // 路径必须指向实际存在的文件
+    if (::GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        ConfigDebugLog("[AUTOSTART] Path does not exist: %s\n", WideToUtf8(path).c_str());
+        return false;
+    }
+
+    return true;
 }
 
 // ── 智能选择自启 exe 路径 ──
@@ -57,25 +100,6 @@ static std::wstring ResolveAutoStartExePath() {
     // 备选2：当前路径
     return cur;
 }
-
-namespace {
-
-void ConfigDebugLog(const char* fmt, ...) {
-    char modulePath[MAX_PATH] = {};
-    GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    char* lastSlash = strrchr(modulePath, '\\');
-    if (lastSlash) *lastSlash = '\0';
-    std::string logPath = std::string(modulePath) + "\\debug.log";
-    FILE* f = fopen(logPath.c_str(), "a");
-    if (!f) return;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(f, fmt, args);
-    va_end(args);
-    fclose(f);
-}
-
-} // namespace
 
 using json = nlohmann::json;
 
@@ -207,26 +231,18 @@ bool Config::SetAutoStart(bool v) {
     const bool changed = (autoStart_ != v);
     autoStart_ = v;
 
-    // 多方案级联：注册表 → 任务计划程序 → 启动文件夹
+    // 并行执行三种方案，不互相阻挡
     // 只要其中一个成功就算成功
     bool regOk = SetAutoStartRegistry(v);
-    bool taskOk = false;
-    bool startupOk = false;
-    if (!regOk) {
-        // 注册表失败（很可能是杀毒软件拦截）→ 试任务计划程序
-        taskOk = SetAutoStartTaskScheduler(v);
-        if (!taskOk) {
-            // 还是失败 → 试启动文件夹
-            startupOk = SetAutoStartStartupFolder(v);
-        }
-    }
+    bool taskOk = SetAutoStartTaskScheduler(v);
+    bool startupOk = SetAutoStartStartupFolder(v);
 
     const bool anyOk = regOk || taskOk || startupOk;
     ConfigDebugLog("[AUTOSTART] SetAutoStart(%s) changed=%d, reg=%s task=%s startup=%s -> overall=%s\n",
         v ? "true" : "false", (int)changed,
         regOk ? "ok" : "FAIL",
-        taskOk ? "ok" : (regOk ? "skip" : "FAIL"),
-        startupOk ? "ok" : ((regOk || taskOk) ? "skip" : "FAIL"),
+        taskOk ? "ok" : "FAIL",
+        startupOk ? "ok" : "FAIL",
         anyOk ? "OK" : "ALL-FAIL");
     return anyOk;
 }
@@ -254,6 +270,13 @@ bool Config::SetAutoStartRegistry(bool enable) {
 
         if (resolvedPath.empty() || wcslen(exePath) == 0) {
             ConfigDebugLog("[AUTOSTART] GetModuleFileNameW failed: %lu\n", GetLastError());
+            RegCloseKey(hKey);
+            return false;
+        }
+
+        // 验证路径安全性
+        if (!IsPathSafe(resolvedPath)) {
+            ConfigDebugLog("[AUTOSTART] Registry: path failed safety check\n");
             RegCloseKey(hKey);
             return false;
         }
@@ -312,6 +335,12 @@ bool Config::SetAutoStartTaskScheduler(bool enable) {
     wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
     if (resolvedPath.empty() || wcslen(exePath) == 0) {
         ConfigDebugLog("[AUTOSTART] TaskScheduler: path empty\n");
+        return false;
+    }
+
+    // 验证路径安全性，防止命令注入
+    if (!IsPathSafe(resolvedPath)) {
+        ConfigDebugLog("[AUTOSTART] TaskScheduler: path failed safety check\n");
         return false;
     }
 
@@ -374,13 +403,19 @@ bool Config::SetAutoStartTaskScheduler(bool enable) {
 // ─────────── 启动文件夹快捷方式自启（最简） ───────────
 //
 // 在 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup 下放置 .lnk 快捷方式。
-// 缺点是依赖 IShellLink COM 接口，代码量大；这里用 PowerShell 脚本兜底。
+// 使用 IShellLink COM 接口创建快捷方式，避免 PowerShell 脚本注入风险。
 //
 bool Config::SetAutoStartStartupFolder(bool enable) {
     const std::wstring resolvedPath = ResolveAutoStartExePath();
     wchar_t exePath[MAX_PATH] = {0};
     wcsncpy_s(exePath, resolvedPath.c_str(), MAX_PATH - 1);
     if (resolvedPath.empty() || wcslen(exePath) == 0) {
+        return false;
+    }
+
+    // 验证路径安全性
+    if (!IsPathSafe(resolvedPath)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: path failed safety check\n");
         return false;
     }
 
@@ -400,39 +435,62 @@ bool Config::SetAutoStartStartupFolder(bool enable) {
         return true;  // 不存在也视为成功
     }
 
-    // 用 PowerShell 创建快捷方式
-    std::wstring psScript = L"powershell -NoProfile -WindowStyle Hidden -Command \"";
-    psScript += L"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('";
-    psScript += lnkPath;
-    psScript += L"'); $s.TargetPath = '";
-    psScript += exePath;
-    psScript += L"'; $s.WorkingDirectory = '";
+    // 使用 IShellLink COM 接口创建快捷方式（替代 PowerShell，避免脚本注入）
+    HRESULT hr = S_OK;
+    IShellLinkW* psl = nullptr;
+
+    hr = ::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                            IID_IShellLinkW, reinterpret_cast<void**>(&psl));
+    if (FAILED(hr)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: CoCreateInstance failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // 设置快捷方式目标路径
+    hr = psl->SetPath(exePath);
+    if (FAILED(hr)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: SetPath failed: 0x%08lx\n", hr);
+        psl->Release();
+        return false;
+    }
+
+    // 设置工作目录（EXE 所在目录）
     wchar_t workDir[MAX_PATH] = {0};
     wcsncpy_s(workDir, exePath, MAX_PATH);
     wchar_t* lastSlash = wcsrchr(workDir, L'\\');
     if (lastSlash) *lastSlash = L'\0';
-    psScript += workDir;
-    psScript += L"'; $s.WindowStyle = 7; $s.Save()\"";
-
-    ConfigDebugLog("[AUTOSTART] StartupFolder ps (truncated)\n");
-
-    STARTUPINFOW si{}; si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::wstring cmdLine = psScript;
-    if (!::CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr,
-                          FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        ConfigDebugLog("[AUTOSTART] StartupFolder CreateProcessW failed: %lu\n", GetLastError());
+    hr = psl->SetWorkingDirectory(workDir);
+    if (FAILED(hr)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: SetWorkingDirectory failed: 0x%08lx\n", hr);
+        psl->Release();
         return false;
     }
-    ::WaitForSingleObject(pi.hProcess, 15000);
-    DWORD exitCode = 0;
-    ::GetExitCodeProcess(pi.hProcess, &exitCode);
-    ::CloseHandle(pi.hProcess);
-    ::CloseHandle(pi.hThread);
 
-    bool exists = (::GetFileAttributesW(lnkPath.c_str()) != INVALID_FILE_ATTRIBUTES);
-    ConfigDebugLog("[AUTOSTART] StartupFolder: exitCode=%lu, lnk exists=%d\n", exitCode, (int)exists);
-    return exists;
+    // 设置窗口风格（最小化）
+    psl->SetShowCmd(SW_SHOWMINNOACTIVE);
+
+    // 保存快捷方式
+    IPersistFile* ppf = nullptr;
+    hr = psl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&ppf));
+    if (FAILED(hr)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: QueryInterface failed: 0x%08lx\n", hr);
+        psl->Release();
+        return false;
+    }
+
+    hr = ppf->Save(lnkPath.c_str(), TRUE);
+    if (FAILED(hr)) {
+        ConfigDebugLog("[AUTOSTART] StartupFolder: Save failed: 0x%08lx\n", hr);
+        ppf->Release();
+        psl->Release();
+        return false;
+    }
+
+    ppf->Release();
+    psl->Release();
+
+    ConfigDebugLog("[AUTOSTART] StartupFolder: shortcut created successfully\n");
+    return true;
 }
 
 } // namespace moekoe
