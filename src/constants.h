@@ -36,12 +36,27 @@ namespace moekoe::constants {
 // ═══════════════════════════════════════
 
 /// MoeKoeMusic WebSocket 服务端口（用于接收歌词数据）
-/// 参考：MoeKoeMusic 源代码中的 WebSocket 服务器初始化
+/// 参考：MoeKoeMusic 源代码中的 WebSocket 服务器初始化。
+/// ⚠️ 作为"默认值"使用；运行时优先从 config.json 读取 advanced.websocket_port。
 constexpr int WEBSOCKET_LISTEN_PORT = 6520;
 
-/// 本插件 HTTP 服务器端口（用于 Chrome Extension popup.js 通信）
-/// ⚠️ 修改此端口时需同步修改 popup.js 中的端口号
+/// 本插件 HTTP 服务器端口（用于 Chrome Extension popup.js 通信）。
+/// ⚠️ 作为"默认值"使用；运行时优先从 config.json 读取 advanced.http_server_port。
+/// 如需修改，请同时调整 moeKoe-taskbar-lyrics/popup.js 中对 HTTP_PORT 的使用。
 constexpr int HTTP_SERVER_PORT = 6523;
+
+/// HTTP / WebSocket 本地鉴权 token（shared-secret）。
+/// popup.js / background.js 与 EXE 内的 HTTP 服务器使用同一 token，
+/// 在 HTTP 请求头中以 X-MoeKoe-Token: <token> 传递。
+/// 目的：阻止其他本地进程在未获 token 的情况下往 HTTP 端口发送 shutdown 等控制命令。
+///
+/// 注意：此 token 仅为"同源弱鉴权"，不能替代 TLS / 签名；
+///       由于两端代码都在同一台机器上，对本地 root 级攻击者无意义。
+constexpr const char* LOCAL_AUTH_TOKEN =
+    "MoeKoeTL-2k7qFb9zXm4Nv3Wc8YhRtSjP0DlQn6Bo1";
+
+/// HTTP 请求中携带鉴权 token 的头名称
+constexpr const char* LOCAL_AUTH_HEADER_NAME = "X-MoeKoe-Token";
 
 // ═══════════════════════════════════════
 // 渲染相关常量

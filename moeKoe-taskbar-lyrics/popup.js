@@ -1,14 +1,21 @@
 // MoeKoe Taskbar Lyrics - Popup Script (使用 window.electronAPI IPC)
 
-const WS_PORT = 6520;   // MoeKoeMusic WebSocket 端口
-const HTTP_PORT = 6523; // C++ EXE 内嵌 HTTP 服务器端口（备用）
+// ── 运行时常量 ──────────────────────────────────────────────────────────────────
+// 注意：WS_PORT 对应 MoeKoeMusic 的 WebSocket 服务端口；
+//       HTTP_PORT 对应本插件 EXE 内嵌入的极简 HTTP 服务器端口。
+// 两者都支持通过扩展本地鉴权 token（与 EXE 端 LOCAL_AUTH_TOKEN 保持一致）。
+// 如需自定义端口，可在 EXE 侧的 config.json -> advanced 中调整；
+// 扩展侧当前读取同名字段，缺省使用下面的默认值（端口冲突时请同步修改）。
+const WS_PORT       = 6520;
+const HTTP_PORT     = 6523;
+const LOCAL_AUTH_TOKEN = 'MoeKoeTL-2k7qFb9zXm4Nv3Wc8YhRtSjP0DlQn6Bo1';
+const AUTH_HEADER   = 'X-MoeKoe-Token';
 
 document.addEventListener('DOMContentLoaded', () => {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const wsStatus = document.getElementById('wsStatus');
     const processStatus = document.getElementById('processStatus');
-    const currentLyric = document.getElementById('currentLyric');
     const btnPrev = document.getElementById('btnPrev');
     const btnToggle = document.getElementById('btnToggle');
     const btnNext = document.getElementById('btnNext');
@@ -56,29 +63,30 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btnStop) btnStop.disabled = !running;
     }
 
-    // 获取插件目录路径（EXE 所在目录）
-async function getPluginDir() {
-    // 如果 electronAPI 有获取路径的方法，优先使用
-    if (window.electronAPI && window.electronAPI.getExtensionPath) {
-        try {
-            const p = await window.electronAPI.getExtensionPath();
-            if (p) return p;
-        } catch (_) {}
+    // 构造携带本地鉴权头的通用 fetch 选项
+    function buildAuthHeaders(extra) {
+        const headers = Object.assign({}, extra || {});
+        headers[AUTH_HEADER] = LOCAL_AUTH_TOKEN;
+        return headers;
     }
 
-    // 回退到相对路径（如果可能）
-    // 注意：这只是一个占位符，实际路径需要由 MoeKoeMusic 通过 electronAPI 提供
-    return '';
-}
+    // 获取插件目录路径（EXE 所在目录）
+    async function getPluginDir() {
+        if (window.electronAPI && window.electronAPI.getExtensionPath) {
+            try {
+                const p = await window.electronAPI.getExtensionPath();
+                if (p) return p;
+            } catch (_) {}
+        }
+        return '';
+    }
 
     // 启动 EXE
     async function launchExe() {
         const pluginDir = await getPluginDir();
         console.log('[TaskbarLyrics] 插件目录:', pluginDir);
 
-        // 方式1: electronAPI.startNativeLauncher（首选）
         if (window.electronAPI) {
-            // 检查方法是否存在
             if (typeof window.electronAPI.startNativeLauncher === 'function') {
                 try {
                     const result = await window.electronAPI.startNativeLauncher(pluginDir);
@@ -87,11 +95,9 @@ async function getPluginDir() {
                 } catch (e) {
                     const errMsg = 'startNativeLauncher 错误: ' + (e.message || e);
                     console.error('[TaskbarLyrics]', errMsg);
-                    // 不立即返回 false，继续尝试其他方式
                 }
             }
 
-            // 方式1b: 尝试其他可能的方法名
             const altMethods = ['startNativeProcess', 'launchExe', 'spawnProcess'];
             for (const m of altMethods) {
                 if (typeof window.electronAPI[m] === 'function') {
@@ -104,10 +110,18 @@ async function getPluginDir() {
             }
         }
 
-        // 方式2: HTTP ping 检测是否已在运行（说明手动启动了）
+        // 回退：通过 HTTP /ping 检查是否已运行（手动启动了）
         try {
-            const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/ping`, { method: 'GET' });
-            if (r.ok) return true; // 已在运行
+            const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/ping`, {
+                method: 'GET',
+                headers: buildAuthHeaders()
+            });
+            if (!r.ok) return false;
+            // 同时校验响应体，避免被非目标服务的 200 也被当成"启动成功"
+            try {
+                const data = await r.json();
+                if (data && data.service === 'MoeKoeTaskbarLyrics') return true;
+            } catch (_) {}
         } catch (_) {}
 
         return false;
@@ -115,7 +129,6 @@ async function getPluginDir() {
 
     // 停止 EXE
     async function stopExe() {
-        // 方式1: electronAPI.stopNativeLauncher
         if (window.electronAPI && typeof window.electronAPI.stopNativeLauncher === 'function') {
             try {
                 const pluginDir = await getPluginDir();
@@ -126,14 +139,21 @@ async function getPluginDir() {
             }
         }
 
-        // 方式2: HTTP shutdown 命令
+        // 回退：通过 HTTP shutdown 命令，并同时校验响应体（非目标服务的 200 被当作成功
         try {
             const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ type: 'control', data: { command: 'shutdown' } })
             });
-            return r.ok;
+            if (!r.ok) return false;
+            try {
+                const data = await r.json();
+                // 严格校验：必须返回 {status:shutting_down} 才算成功
+                return !!(data && data.status === 'shutting_down');
+            } catch (_) {
+                return false;
+            }
         } catch (e) {
             console.warn('[TaskbarLyrics] HTTP shutdown 失败:', e);
             return false;
@@ -142,7 +162,6 @@ async function getPluginDir() {
 
     // 检测进程状态
     async function checkProcessRunning() {
-        // 方式1: electronAPI.isNativeLauncherRunning
         if (window.electronAPI && typeof window.electronAPI.isNativeLauncherRunning === 'function') {
             try {
                 const pluginDir = await getPluginDir();
@@ -152,15 +171,22 @@ async function getPluginDir() {
             }
         }
 
-        // 方式2: HTTP ping
+        // 回退：HTTP /ping（带鉴权头 + 校验 body
         try {
             const controller = new AbortController();
             setTimeout(() => controller.abort(), 2000);
             const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/ping`, {
                 method: 'GET',
+                headers: buildAuthHeaders(),
                 signal: controller.signal
             });
-            return r.ok;
+            if (!r.ok) return false;
+            try {
+                const data = await r.json();
+                return !!(data && data.service === 'MoeKoeTaskbarLyrics');
+            } catch (_) {
+                return false;
+            }
         } catch (_) {
             return false;
         }
@@ -180,9 +206,12 @@ async function getPluginDir() {
                 updateConnectionUI(message.connected);
                 break;
             case 'lyrics':
-                if (message.data && message.data.currentLine) {
+                const currentLyric = document.getElementById('currentLyric');
+                if (currentLyric && message.data && message.data.currentLine) {
                     currentLyric.textContent = message.data.currentLine;
                 }
+                break;
+            default:
                 break;
         }
     });

@@ -564,11 +564,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
             ::PostQuitMessage(0);
         }
     });
-    const int httpPort = HTTP_SERVER_PORT; // popup.js 固定使用此端口
+    // HTTP 端口从 config 读取（默认 6523）；异常时退回到 constants.h 中的默认值。
+    const int httpPort = (config.Advanced().httpServerPort > 0)
+                             ? config.Advanced().httpServerPort
+                             : static_cast<int>(moekoe::constants::HTTP_SERVER_PORT);
     if (httpServer.Start(httpPort)) {
         DebugLog("[STARTUP] HTTP server started on port %d\n", httpPort);
     } else {
-        DebugLog("[STARTUP] HTTP server failed to start (non-fatal)\n");
+        DebugLog("[STARTUP] HTTP server failed to start on port %d (non-fatal)\n", httpPort);
     }
 
     // 11) 绑定模式：启动进程监控

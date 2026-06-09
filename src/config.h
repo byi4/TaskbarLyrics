@@ -31,6 +31,7 @@ struct AppearanceConfig {
 
 struct AdvancedConfig {
     int  websocketPort{6520};
+    int  httpServerPort{6523};
     int  refreshRateHz{60};
     bool debugLog{false};
 };

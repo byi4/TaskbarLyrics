@@ -29,14 +29,52 @@ void SendResponse(SOCKET client, int statusCode, const char* statusText,
         "Content-Type: %s\r\n"
         "Access-Control-Allow-Origin: http://127.0.0.1:%d\r\n"
         "Access-Control-Allow-Methods: GET, POST\r\n"
-        "Access-Control-Allow-Headers: Content-Type\r\n"
+        "Access-Control-Allow-Headers: Content-Type, %s\r\n"
         "Content-Length: %d\r\n"
         "Connection: close\r\n"
         "\r\n",
         statusCode, statusText, contentType,
-        moekoe::constants::HTTP_SERVER_PORT, bodyLen);
+        moekoe::constants::HTTP_SERVER_PORT,
+        moekoe::constants::LOCAL_AUTH_HEADER_NAME,
+        bodyLen);
     send(client, header, n, 0);
     send(client, body, bodyLen, 0);
+}
+
+// 从原始请求中抽取指定头的值（大小写不敏感；仅支持单值）。
+// 找不到时返回空字符串。
+std::string ExtractHeader(const char* request, size_t len, const char* headerName) {
+    if (!request || !headerName) return {};
+    const size_t nameLen = strlen(headerName);
+    const char* const end = request + len;
+    (void)len;     // 显式使用，避免部分编译器误报 C4100
+    // 逐行扫描；每行以 \r\n 结尾
+    const char* p = request;
+    while (p < end) {
+        const char* eol = strstr(p, "\r\n");
+        if (!eol || eol == p) break;     // 空行即 header 结束
+        const size_t lineLen = static_cast<size_t>(eol - p);
+        if (lineLen > nameLen + 2
+            && _strnicmp(p, headerName, nameLen) == 0
+            && p[nameLen] == ':') {
+            const char* val = p + nameLen + 1;
+            while (val < eol && (*val == ' ' || *val == '\t')) ++val;
+            return std::string(val, static_cast<size_t>(eol - val));
+        }
+        p = eol + 2;
+    }
+    return {};
+}
+
+// 严格校验本地鉴权 token（shared-secret），防止其他本地进程伪造控制命令。
+// 返回 true 表示校验通过；失败时会直接向客户端返回 403，由调用方终止处理。
+bool CheckLocalAuthToken(SOCKET client, const char* request, size_t len) {
+    const std::string token = ExtractHeader(request, len,
+                                            moekoe::constants::LOCAL_AUTH_HEADER_NAME);
+    if (token == moekoe::constants::LOCAL_AUTH_TOKEN) return true;
+    SendResponse(client, 403, "Forbidden", "application/json",
+                 "{\"error\":\"invalid or missing auth token\"}");
+    return false;
 }
 
 // 严格验证 POST 命令：使用 JSON 白名单而非子字符串匹配
@@ -61,6 +99,7 @@ bool IsValidShutdownCommand(const std::string& bodyStr) {
 
 // 解析请求行中的路径（简化版，只取第一行）
 std::string ExtractPath(const char* request, size_t len) {
+    (void)len;
     const char* start = strchr(request, ' ');
     if (!start) return "/";
     ++start;
@@ -194,8 +233,15 @@ void HttpServer::ServerLoop(int port) {
         DebugLog("[HTTP] Request: %s %s (%d bytes)\n",
                  method.c_str(), path.c_str(), totalLen);
 
+        // ── 本地鉴权：OPTIONS 预检请求跳过（浏览器不带自定义头） ──
+        if (method != "OPTIONS" && !CheckLocalAuthToken(client, buffer, static_cast<size_t>(totalLen))) {
+            closesocket(client);
+            continue;
+        }
+
         // 路由处理
         if (method == "GET" && path == "/ping") {
+            // 在响应体中携带 service 字段，popup.js 可据此确认不是被劫持的 200
             SendResponse(client, 200, "OK", "application/json",
                          "{\"status\":\"ok\",\"service\":\"MoeKoeTaskbarLyrics\"}");
         } else if (method == "POST" && (path == "/" || path == "/shutdown")) {
@@ -222,6 +268,9 @@ void HttpServer::ServerLoop(int port) {
                 SendResponse(client, 400, "Bad Request", "application/json",
                              "{\"error\":\"no body\"}");
             }
+        } else if (method == "OPTIONS") {
+            // CORS 预检：返回 204 No Content + CORS 头（SendResponse 已包含）
+            SendResponse(client, 204, "No Content", "text/plain", "");
         } else {
             SendResponse(client, 404, "Not Found", "application/json",
                          "{\"error\":\"not found\"}");
