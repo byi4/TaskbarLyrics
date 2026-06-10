@@ -74,9 +74,12 @@ public:
     bool IsPositionLocked() const { return positionLocked_; }
     void SetPositionLocked(bool locked) { positionLocked_ = locked; }
 
-    // 完全锁定：禁止拖动 + 禁止悬停按钮交互
+    // 完全锁定：禁止拖动+禁止悬停按钮交互
     bool IsFullyLocked() const { return fullyLocked_; }
     void SetFullyLocked(bool locked) { fullyLocked_ = locked; }
+
+    // APPBAR 自动隐藏状态查询（供主循环判断是否应跳过渲染）
+    bool IsAutoHideHidden() const { return taskbarAutoHide_ && !taskbarVisible_; }
 
     // 拖动偏移（用户手动拖动调整的位置）
     int GetDragOffsetX() const { return dragOffsetX_; }

@@ -141,27 +141,28 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
     DetectTaskbarInfo();
 
     // ── APPBAR 自动隐藏处理 ──
-    // 当任务栏开启自动隐藏时，检测任务栏当前是否可见（鼠标是否在任务栏区域）
-    // 任务栏不可见时隐藏歌词窗口，避免遮挡桌面内容
+    // 通过任务栏实际矩形高度判断其是否处于"滑出"状态：
+    //   隐藏时高度 ≈ 2-4px（仅保留边缘触发条），显示时恢复正常（40-48px）
+    // 比基于鼠标位置的 PtInRect 更稳定，避免边缘抖动导致的闪烁
     if (taskbarAutoHide_) {
-        POINT pt{};
-        ::GetCursorPos(&pt);
-        // 判断鼠标是否在任务栏矩形范围内
-        const bool cursorOnTaskbar = (::PtInRect(&info_.rect, pt) != FALSE);
-        const bool shouldShow = cursorOnTaskbar;
+        RECT tbCurrent{};
+        ::GetWindowRect(hTaskbar_, &tbCurrent);
+        const int tbH = tbCurrent.bottom - tbCurrent.top;
+        constexpr int kAutoHideThreshold = 10;  // 低于此值认为任务栏已收起
+        const bool tbIsVisible = (tbH >= kAutoHideThreshold);
 
-        if (shouldShow && !taskbarVisible_) {
+        if (tbIsVisible && !taskbarVisible_) {
             taskbarVisible_ = true;
             // 继续下面的正常定位流程
-        } else if (!shouldShow && taskbarVisible_) {
+        } else if (!tbIsVisible && taskbarVisible_) {
             taskbarVisible_ = false;
             ::ShowWindow(hwnd_, SW_HIDE);
             return;  // 隐藏后不执行定位
-        } else if (!shouldShow && !taskbarVisible_) {
+        } else if (!tbIsVisible && !taskbarVisible_) {
             ::ShowWindow(hwnd_, SW_HIDE);
             return;  // 保持隐藏
         }
-        // shouldShow == true && taskbarVisible_ == true: 正常显示
+        // tbIsVisible == true && taskbarVisible_ == true: 正常显示
     } else {
         // 非自动隐藏模式：确保窗口可见
         if (!taskbarVisible_) {
@@ -314,11 +315,12 @@ void TaskbarWindow::CheckResize() {
     if (!::EqualRect(&tb, &lastTaskbarRect_)) {
         PositionLyricsInTaskbar();
     } else if (taskbarAutoHide_) {
-        // 自动隐藏模式：即使任务栏矩形未变，鼠标进出任务栏区域也需要响应
-        POINT pt{};
-        ::GetCursorPos(&pt);
-        const bool cursorOnTaskbar = (::PtInRect(&tb, pt) != FALSE);
-        if (cursorOnTaskbar != taskbarVisible_) {
+        // 自动隐藏模式：即使矩形未变，任务栏可能已滑出/滑入（高度变化）
+        // 重新检测以响应状态变更
+        const int tbH = tb.bottom - tb.top;
+        constexpr int kAutoHideThreshold = 10;
+        const bool tbIsVisible = (tbH >= kAutoHideThreshold);
+        if (tbIsVisible != taskbarVisible_) {
             PositionLyricsInTaskbar();
         }
     }

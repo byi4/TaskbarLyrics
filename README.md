@@ -164,10 +164,9 @@ cmake --build --preset x64-Release
 
 - **APPBAR 自动隐藏适配**：通过 `SHAppBarMessage(ABM_GETSTATE)` 检测任务栏自动隐藏状态，歌词窗口跟随任务栏显隐（鼠标进出任务栏区域触发）
 - **锁定位置 / 完全锁定功能**：托盘菜单新增"锁定位置"和"完全锁定"选项；锁定位置禁止拖动但保留按钮操作；完全锁定禁止所有鼠标交互
-- **统一日志系统**：新建 `logger.h/cpp` 模块，将 6 处分散的 DebugLog/ConfigDebugLog 实现合并为单一 `moekoe::Log()` 接口；线程安全（`std::mutex`）；消除 api_enabler.cpp 中硬编码路径的安全风险
+- **统一日志系统**：新建 `logger.h/cpp` 模块，将 6 处分散的 DebugLog/ConfigDebugLog 实现合并为单一 `moekoe::Log()` 接口；线程安全（`std::mutex`）；消除 api\_enabler.cpp 中硬编码路径的安全风险
 - **移除"启用歌词显示"功能**：删除托盘菜单项、设置页面开关、禁用模式启动分支；程序启动后始终完整初始化所有模块
 - **锁定按钮交互修复**：修正位置锁定模式下仍可点击上一首/下一首/暂停按钮
-- **GPL-2.0 许可证文件**：添加 LICENSE 文件，GitHub 自动识别显示
 
 ## 开发文档
 

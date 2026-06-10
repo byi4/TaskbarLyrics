@@ -263,10 +263,13 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_TIMER: {
         try {
             // ═══════ 帧渲染流程 ═══════
-            // 1. 检测任务栏尺寸变化（每帧检查一次，用于响应 DPI 变化）
+            // 1. 检测任务栏尺寸变化（含 APPBAR 自动隐藏鼠标进出检测）
             if (app->taskbarWindow) app->taskbarWindow->CheckResize();
 
-            // 2. 从歌词解析器获取当前应渲染的状态
+            // 2. APPBAR 自动隐藏：窗口已隐藏时跳过渲染（避免 UpdateLayeredWindow 隐式显示导致闪烁）
+            if (app->taskbarWindow && app->taskbarWindow->IsAutoHideHidden()) return 0;
+
+            // 3. 从歌词解析器获取当前应渲染的状态
             if (app->parser && app->renderer) {
                 auto state = app->parser->GetCurrentRenderState();
 
@@ -312,6 +315,9 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_RENDER_UPDATE: {
         try {
+            // APPBAR 自动隐藏时跳过悬停重绘
+            if (app->taskbarWindow && app->taskbarWindow->IsAutoHideHidden()) return 0;
+
             if (app->parser && app->renderer && app->taskbarWindow) {
                 auto state = app->parser->GetCurrentRenderState();
                 state.isHovering = app->taskbarWindow->IsHovering();
