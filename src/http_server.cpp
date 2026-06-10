@@ -19,8 +19,8 @@ void DebugLog(const char* /*fmt*/, ...) {
     // 日志已在 main.cpp 中集中处理
 }
 
-// 发送 HTTP 响应（CORS 仅允许 localhost）
-void SendResponse(SOCKET client, int statusCode, const char* statusText,
+// 发送 HTTP 响应（CORS 仅允许 localhost，端口使用实际监听端口）
+void SendResponse(SOCKET client, int port, int statusCode, const char* statusText,
                   const char* contentType, const char* body) {
     char header[512];
     int bodyLen = static_cast<int>(strlen(body));
@@ -28,13 +28,13 @@ void SendResponse(SOCKET client, int statusCode, const char* statusText,
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Access-Control-Allow-Origin: http://127.0.0.1:%d\r\n"
-        "Access-Control-Allow-Methods: GET, POST\r\n"
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         "Access-Control-Allow-Headers: Content-Type, %s\r\n"
         "Content-Length: %d\r\n"
         "Connection: close\r\n"
         "\r\n",
         statusCode, statusText, contentType,
-        moekoe::constants::HTTP_SERVER_PORT,
+        port,
         moekoe::constants::LOCAL_AUTH_HEADER_NAME,
         bodyLen);
     send(client, header, n, 0);
@@ -72,7 +72,7 @@ bool CheckLocalAuthToken(SOCKET client, const char* request, size_t len) {
     const std::string token = ExtractHeader(request, len,
                                             moekoe::constants::LOCAL_AUTH_HEADER_NAME);
     if (token == moekoe::constants::LOCAL_AUTH_TOKEN) return true;
-    SendResponse(client, 403, "Forbidden", "application/json",
+    SendResponse(client, port, 403, "Forbidden", "application/json",
                  "{\"error\":\"invalid or missing auth token\"}");
     return false;
 }
@@ -242,7 +242,7 @@ void HttpServer::ServerLoop(int port) {
         // 路由处理
         if (method == "GET" && path == "/ping") {
             // 在响应体中携带 service 字段，popup.js 可据此确认不是被劫持的 200
-            SendResponse(client, 200, "OK", "application/json",
+            SendResponse(client, port, 200, "OK", "application/json",
                          "{\"status\":\"ok\",\"service\":\"MoeKoeTaskbarLyrics\"}");
         } else if (method == "POST" && (path == "/" || path == "/shutdown")) {
             // 查找 JSON body（在 \r\n\r\n 之后）
@@ -254,25 +254,25 @@ void HttpServer::ServerLoop(int port) {
                 // 严格验证命令（白名单匹配，非子字符串）
                 if (IsValidShutdownCommand(bodyStr)) {
                     DebugLog("[HTTP] Received valid shutdown command\n");
-                    SendResponse(client, 200, "OK", "application/json",
+                    SendResponse(client, port, 200, "OK", "application/json",
                                  "{\"status\":\"shutting_down\"}");
 
                     if (onCommand_) {
                         onCommand_("shutdown");
                     }
                 } else {
-                    SendResponse(client, 400, "Bad Request", "application/json",
+                    SendResponse(client, port, 400, "Bad Request", "application/json",
                                  "{\"error\":\"invalid command\"}");
                 }
             } else {
-                SendResponse(client, 400, "Bad Request", "application/json",
+                SendResponse(client, port, 400, "Bad Request", "application/json",
                              "{\"error\":\"no body\"}");
             }
         } else if (method == "OPTIONS") {
             // CORS 预检：返回 204 No Content + CORS 头（SendResponse 已包含）
-            SendResponse(client, 204, "No Content", "text/plain", "");
+            SendResponse(client, port, 204, "No Content", "text/plain", "");
         } else {
-            SendResponse(client, 404, "Not Found", "application/json",
+            SendResponse(client, port, 404, "Not Found", "application/json",
                          "{\"error\":\"not found\"}");
         }
 

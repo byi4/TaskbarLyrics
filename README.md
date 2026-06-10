@@ -1,6 +1,6 @@
 # MoeKoeMusic Taskbar Lyrics
 
-> Windows 任务栏的歌词显示插件（v0.3.5）
+> Windows 任务栏的歌词显示插件（v0.3.6）
 
 ## 项目简介
 
@@ -8,7 +8,7 @@
 
 作为 **MoeKoeMusic 插件** 集成，目前支持从插件 popup 界面停止，启动功能待完善。
 
-## 当前状态 (v0.3.5)
+## 当前状态 (v0.3.6)
 
 ### 已完成
 
@@ -18,12 +18,16 @@
 - WebView2 设置界面 + Win32 回退
 - 配置持久化（%APPDATA%）
 - 6 种预设主题色
-- HTTP 接口（ping/shutdown）
+- HTTP 接口（ping/shutdown，含本地鉴权）
 - Z-order 三重防护（防止被任务栏覆盖）
 - API 模式自动检测与开启（连接失败时自动开启 MoeKoeMusic 的 WS 服务）
 - 刷新率最高 120 FPS
-- 开机自动启动（注册表/任务计划/启动文件夹三种方式并行，应该没问题了...应该吧？）
-- 安全加固（命令注入防护、路径验证、CORS 限制）
+- 开机自动启动（注册表/任务计划/启动文件夹三种方式并行）
+- 安全加固 v2（命令注入防护、路径验证、CORS 限制、本地 Token 鉴权、响应体校验）
+- 端口可配置（`config.json` 的 `advanced.http_server_port` 字段，默认 6523）
+- OPTIONS 预检请求正确处理（CORS 兼容）
+- 插件图标统一为 256px（manifest + 发布包 public/ 结构）
+- 打包脚本 `scripts/package.ps1`（生成符合 MoeKoeMusic-Plugins 审核规范的 zip）
 
 ### 待改进
 
@@ -63,7 +67,8 @@
 
 - Chrome Extension Manifest V3 格式
 - popup.js 通过 `file://` 协议启动 EXE（不依赖宿主 IPC）
-- HTTP 接口（端口 6523）：ping 检测存活 / shutdown 优雅退出
+- HTTP 接口（端口 6523，可配置）：ping 检测存活 / shutdown 优雅退出 / 播放控制
+- 本地 Token 鉴权：所有非 OPTIONS 请求需携带 `X-MoeKoe-Token` 头，防止本地其他进程劫持
 - 托盘菜单：设置 / 重连 / 解除绑定 / 退出
 
 ### 运行模式
@@ -99,6 +104,10 @@ cmake --build --preset x64-Release
 #   → resources/ 到输出目录
 #   → MoeKoeTaskbarLyrics.exe 到插件目录
 #   → WebView2Loader.dll 到输出目录
+
+# 打包发布（生成符合 MoeKoeMusic-Plugins 审核规范的 zip）
+.\scripts\package.ps1
+# 输出: moeKoe-taskbar-lyrics.zip（内含 public/ 目录结构）
 ```
 
 > **注意**：由于 ixwebsocket 预编译库使用 MSVC 14.44 编译，项目需要使用相同版本工具集。`CMakePresets.json` 已配置自动传递 `/p:PlatformToolsetVersion=14.44.35207`。如果说您在自己的设备上编译时出现环境问题的话，请尽量自己解决，因为我自己的设备上环境太乱了，我也很头大，等哪天固态价格降到合适的时候，我一定买个512或者1T的，然后重新配置环境。
@@ -118,14 +127,24 @@ cmake --build --preset x64-Release
 
 在 MoeKoeMusic 的插件页面点击"打开插件目录"，打开`moeKoe-taskbar-lyrics`文件夹，双击`MoeKoeTaskbarLyrics.exe`启动。
 
-## 安全说明 (v0.3.5)
+## 安全说明 (v0.3.6)
 
 本版本进行了多项安全加固：
+
+### v0.3.5 基础加固
 
 - **命令注入防护**：自启动路径验证，过滤危险字符
 - **HTTP 接口加固**：关闭命令使用 JSON 白名单验证，CORS 限制为 127.0.0.1
 - **COM 替代 PowerShell**：创建启动文件夹快捷方式使用 IShellLink COM 接口，避免脚本注入
 - **歌词解析限制**：防止恶意歌词导致内存耗尽
+
+### v0.3.6 新增加固
+
+- **本地 Token 鉴权**：HTTP 端点要求 `X-MoeKoe-Token` 自定义头，防止本地其他进程绑定同端口后劫持控制（OPTIONS 预检请求自动跳过）
+- **响应体校验**：shutdown 端点不再仅凭 HTTP 200 判断成功，必须返回 `{"status":"shutting_down"}` 确定性 JSON 体
+- **端口可配置**：HTTP 监听端口可通过 `config.json` 的 `advanced.http_server_port` 自定义（默认 6523），CORS `Allow-Origin` 自动使用实际监听端口
+- **onMessage 兜底处理**：Chrome Extension 的消息监听器所有分支均显式调用 sendResponse，default 路径返回 false 避免告警
+- **发布包清理**：`.gitignore` 排除 `*.WebView2/` 目录，防止开发者环境路径泄露到发布包
 
 ## 开发文档
 
