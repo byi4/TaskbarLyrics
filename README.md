@@ -155,4 +155,4 @@ cmake --build --preset x64-Release
 
 ## 开发文档
 
-如果你想进一步了解本项目，可以查看 `CODE_REVIEW.md` 了解代码审查和安全分析详情。
+如果你想进一步了解本项目，可以查看 `MoeKoeMusic_TaskbarLyrics_开发文档.md` 和 `项目状态文档.md` 了解代码项目详情。
