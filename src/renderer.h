@@ -85,7 +85,8 @@ private:
 
     /// 更新跑马灯状态机，返回当前应使用的水平滚动偏移量（像素）
     /// needRedraw: 输出参数，表示是否因为滚动动画需要重绘
-    float UpdateMarquee(const std::string& lyricText, bool& needRedraw);
+    /// progress: 当前歌词高亮进度 [0.0, 1.0]，用于控制回位时机
+    float UpdateMarquee(const std::string& lyricText, float progress, bool& needRedraw);
 
     HWND hwnd_{nullptr};
     UINT width_{0};
@@ -121,6 +122,7 @@ private:
     std::string    marqueeLastText_;              // 上一次的歌词文本（用于检测歌词切换）
     float          marqueeTextWidth_{0.0f};       // 当前歌词文本的像素宽度（缓存）
     float          marqueeMaxOffset_{0.0f};       // 最大可滚动偏移量 = textWidth - availableWidth
+    float          marqueeProgress_{0.0f};         // 当前歌词高亮进度 [0.0, 1.0]，用于控制回位时机
 };
 
 } // namespace moekoe

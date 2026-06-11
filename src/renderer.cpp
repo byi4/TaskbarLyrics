@@ -273,17 +273,20 @@ void TaskbarRenderer::DrawHighlightedTextPerCharacter(const std::wstring& text,
     const float textWidth = hasLayout ? metrics.width : 0.0f;
 
     // ── 判断是否需要跑马灯滚动 ──
+    // 只要文本超宽且跑马灯状态机已激活（非Idle），就始终使用滚动模式绘制，
+    // 避免 scrollOffset 从 0 跳变到 > 0 时产生 居中→左对齐 的视觉闪烁。
     const bool needsMarquee = (hasLayout && textWidth > availableWidth + 1.0f
-                               && scrollOffset > 0.0f);
+                               && marqueeState_ != MarqueeState::Idle);
 
     if (needsMarquee) {
         // ═══════ 滚动模式：用 DrawTextLayout + 精确坐标 ═══════
         // 将布局改为左对齐，避免 CENTER 对齐导致的位置偏差
         fullLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
 
-        // 文本从"视觉居中位置"向左偏移 scrollOffset
-        const float centeredLeft = paddingX + (availableWidth - textWidth) / 2.0f;
-        const float textLeft = centeredLeft - scrollOffset;
+        // 滚动模式：文本起始位置紧贴左侧内边距（paddingX），
+        // 随 scrollOffset 增大向左偏移，从而逐步露出右侧被截断的内容。
+        // scrollOffset==0 时第一个字在最左侧，只有右侧被截断（符合从左到右的高亮方向）。
+        const float textLeft = paddingX - scrollOffset;
 
         // 用 DrawTextLayout + Point2F 精确定位，完全绕过 DrawTextW 的自动对齐
         renderTarget_->DrawTextLayout(
@@ -458,7 +461,7 @@ void TaskbarRenderer::Render(const RenderState& state) {
 
     // 跑马灯状态机更新（每帧调用，返回滚动偏移量）
     bool marqueeNeedsRedraw = false;
-    float scrollOffset = UpdateMarquee(state.currentLine, marqueeNeedsRedraw);
+    float scrollOffset = UpdateMarquee(state.currentLine, static_cast<float>(state.progress), marqueeNeedsRedraw);
 
     bool stateChanged = (state.hasLyrics != lastState_.hasLyrics ||
                          state.currentLine != lastState_.currentLine ||
@@ -556,7 +559,7 @@ TaskbarRenderer::MarqueeMode TaskbarRenderer::ParseMarqueeMode(const std::string
     return MarqueeMode::Bounce;  // default
 }
 
-float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, bool& needRedraw) {
+float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, float progress, bool& needRedraw) {
     needRedraw = false;
 
     const MarqueeMode mode = ParseMarqueeMode(settings_.marqueeMode);
@@ -578,6 +581,7 @@ float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, bool& needRed
     if (lyricText != marqueeLastText_) {
         marqueeLastText_ = lyricText;
         scrollOffset_ = 0.0f;
+        marqueeProgress_ = 0.0f;
 
         // 测量文本宽度
         marqueeTextWidth_ = 0.0f;
@@ -599,7 +603,9 @@ float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, bool& needRed
         // 判断是否需要滚动：文本宽度 > 可用宽度
         if (marqueeTextWidth_ > availableWidth + 1.0f) {
             marqueeMaxOffset_ = marqueeTextWidth_ - availableWidth;
-            marqueeState_ = MarqueeState::Delay;
+            // 长歌词直接进入滚动状态（跟随高亮进度），不需要先 Delay 等待。
+            // Delay 仅用于 bounce 模式的回位后循环。
+            marqueeState_ = MarqueeState::ScrollLeft;
         } else {
             // 短文本不需要滚动
             marqueeState_ = MarqueeState::Idle;
@@ -615,6 +621,9 @@ float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, bool& needRed
     if (marqueeState_ == MarqueeState::Idle) {
         return 0.0f;
     }
+
+    // 记录当前高亮进度（用于控制回位时机）
+    marqueeProgress_ = progress;
 
     const double now = GetCurrentTimeSeconds();
     const double elapsed = now - stateStartTime_;
@@ -641,11 +650,24 @@ float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, bool& needRed
         return 0.0f;
 
     case MarqueeState::ScrollLeft: {
-        const float distance = static_cast<float>(elapsed) * speed;
-        scrollOffset_ = std::min(distance, marqueeMaxOffset_);
+        // 基于高亮进度计算目标滚动位置，然后以恒定速度平滑逼近。
+        // 这样滚动速度始终为配置的 marqueeSpeedPxPerSec，不会出现先快后慢的突变。
+        const float progressClamped = std::clamp(progress, 0.0f, 1.0f);
+        const float targetOffset = progressClamped * marqueeMaxOffset_;
+
+        const float maxStep = static_cast<float>(elapsed) * speed;
+        if (scrollOffset_ < targetOffset) {
+            scrollOffset_ = std::min(scrollOffset_ + maxStep, targetOffset);
+        } else if (scrollOffset_ > targetOffset) {
+            // 进度回退时（罕见），也平滑跟回
+            scrollOffset_ = std::max(scrollOffset_ - maxStep, targetOffset);
+        }
         needRedraw = true;
 
-        if (scrollOffset_ >= marqueeMaxOffset_) {
+        // 只有同时满足以下两个条件才触发回位序列：
+        // 1. 已滚动到最大偏移量（整句歌词末端已可见）
+        // 2. 高亮进度已完成（progress >= 1.0）
+        if (scrollOffset_ >= marqueeMaxOffset_ && progress >= 1.0f) {
             scrollOffset_ = marqueeMaxOffset_;
             if (mode == MarqueeMode::Bounce) {
                 marqueeState_ = MarqueeState::PauseRight;

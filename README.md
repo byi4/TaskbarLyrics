@@ -31,6 +31,7 @@
 - OPTIONS 预检请求正确处理（CORS 兼容）
 - 插件图标统一为 256px（manifest + 发布包 public/ 结构）
 - 打包脚本 `scripts/package.ps1`（生成符合 MoeKoeMusic-Plugins 审核规范的 zip）
+- 长歌词跑马灯滚动（bounce/loop/off 三种模式，问题终于修复了🥴）
 
 ### 待改进
 
@@ -39,7 +40,6 @@
 - 歌词缓存（离线显示，待测试）
 - 多方向任务栏适配（待测试）
 - 字体/颜色/字号/透明度/卡拉OK/翻译 全部可配（实测在应用中切换翻译时，任务栏歌词未切换）
-- 长歌词跑马灯滚动（bounce/loop/off 三种模式，待测试，额，这个走马灯效果好像不怎么好看？）
 - Windhawk / Explorer Hook 方案（真正嵌入任务栏的方案后续会考虑的）
 
 ## 主要特性
