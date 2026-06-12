@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
-    branches: [main]
+    branches: ['**']
 
 jobs:
   build:
@@ -33,7 +33,6 @@ jobs:
         shell: powershell
         run: |
           $vcpkgRoot = "${{ github.workspace }}\vcpkg"
-          $installDir = "${{ github.workspace }}\vcpkg_installed\x64-windows"
 
           if (!(Test-Path $vcpkgRoot)) {
             git clone https://github.com/microsoft/vcpkg.git $vcpkgRoot
@@ -41,8 +40,12 @@ jobs:
             & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
           }
 
-          & "$vcpkgRoot\vcpkg.exe" install --triplet x64-windows --x-install-root="$installDir" --manifest
+          & "$vcpkgRoot\vcpkg.exe" install ixwebsocket nlohmann-json zlib mbedtls --triplet x64-windows --classic
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          $installDir = "$vcpkgRoot\installed\x64-windows"
+          Write-Host "VCPKG_INSTALLED_DIR=$installDir"
+          echo "VCPKG_INSTALLED_DIR=$installDir" >> $env:GITHUB_ENV
 
       - name: Configure CMake
         shell: powershell
@@ -72,7 +75,7 @@ jobs:
           } else { Write-Host "WARNING: WebView2.h not found in package"; $incDir = "" }
           
           cmake -B build -S . `
-            "-DVCPKG_INSTALLED_DIR=${{ github.workspace }}\vcpkg_installed\x64-windows" `
+            "-DVCPKG_INSTALLED_DIR=$env:VCPKG_INSTALLED_DIR" `
             "-DWEBVIEW2_INCLUDE_DIR=$incDir" `
             "-DWEBVIEW2_LOADER_DIR=$libDir" `
             -DCMAKE_BUILD_TYPE=Release
