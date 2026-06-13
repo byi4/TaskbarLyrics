@@ -7,16 +7,36 @@
 
 const WS_PORT = 6520;
 const RECONNECT_INTERVAL = 3000;
+const MAX_RECONNECT_DELAY = 30000; // 最大重连间隔 30 秒
 const CONNECT_TIMEOUT = 5000; // 5 秒连接超时
 const HOST_ID = 'taskbar-lyrics-host';
 
 let ws = null;
 let connected = false;
+let reconnectAttempts = 0;
+
+// ---- Token 管理 ----
+// 在 Service Worker 启动时生成并缓存令牌，避免每次同步读取 storage
+let cachedAuthToken = null;
+
+// 获取本地鉴权令牌（首次自动生成并持久化）
+async function getAuthToken() {
+    if (cachedAuthToken) return cachedAuthToken;
+    const result = await chrome.storage.local.get('authToken');
+    if (result.authToken) {
+        cachedAuthToken = result.authToken;
+        return cachedAuthToken;
+    }
+    // 不存在则生成新令牌
+    const token = 'MoeKoeTL-' + crypto.randomUUID();
+    await chrome.storage.local.set({ authToken: token });
+    cachedAuthToken = token;
+    return token;
+}
 
 // ---- Native Host Bridge 管理 ----
 
 let bridgePort = null;
-let requestId = 0;
 const pending = new Map();
 
 // 监听 bridge 页面连接（native-bridge.html 由 Main Process 隐藏打开）
@@ -65,7 +85,7 @@ function sendBridgeRequest(type, payload) {
             return;
         }
 
-        const id = ++requestId;
+        const id = crypto.randomUUID();
         bridgePort.postMessage({ type, payload, requestId: id });
         pending.set(id, resolve);
 
@@ -99,6 +119,15 @@ async function sendToHost(payload) {
 
 // ---- WebSocket 连接管理 ----
 
+// 指数退避重连策略
+function scheduleReconnect() {
+    // 首次连接失败使用 1 秒，之后以指数退避递增，上限 MAX_RECONNECT_DELAY
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+    reconnectAttempts++;
+    console.log(`[TaskbarLyrics] ${delay / 1000} 秒后尝试重连 (第 ${reconnectAttempts} 次)`);
+    setTimeout(connectWebSocket, delay);
+}
+
 function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
@@ -120,16 +149,26 @@ function connectWebSocket() {
             if (!hasConnected && ws && ws.readyState !== WebSocket.OPEN) {
                 console.log('[TaskbarLyrics] WebSocket 连接超时');
                 try { ws.close(); } catch (_) {}
-                setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+                scheduleReconnect();
             }
         }, CONNECT_TIMEOUT);
 
         ws.onopen = () => {
             hasConnected = true;
+            reconnectAttempts = 0; // 连接成功，重置重连计数
             clearConnectionTimeout();
             connected = true;
             console.log('[TaskbarLyrics] WebSocket 已连接');
             broadcastToPopup({ type: 'connectionStatus', connected: true });
+
+            // 发送身份验证令牌（服务端可选支持校验）
+            getAuthToken().then(token => {
+                try {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'auth', token }));
+                    }
+                } catch (_) {}
+            });
         };
 
         ws.onmessage = (event) => {
@@ -146,8 +185,7 @@ function connectWebSocket() {
             connected = false;
             console.log('[TaskbarLyrics] WebSocket 已断开');
             broadcastToPopup({ type: 'connectionStatus', connected: false });
-            // 只有在成功连接后又断开时才使用常规重连间隔
-            setTimeout(connectWebSocket, hasConnected ? RECONNECT_INTERVAL : 1000);
+            scheduleReconnect();
         };
 
         ws.onerror = () => {
@@ -155,7 +193,7 @@ function connectWebSocket() {
         };
     } catch (e) {
         console.error('[TaskbarLyrics] 连接失败:', e);
-        setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+        scheduleReconnect();
     }
 }
 
@@ -206,6 +244,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message && message.type) {
         case 'getStatus':
             sendResponse({ connected });
+            return true;
+
+        case 'getAuthToken':
+            getAuthToken().then(token => sendResponse({ token }));
             return true;
 
         case 'control':

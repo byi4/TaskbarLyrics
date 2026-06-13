@@ -9,7 +9,6 @@
 // ── 运行时常量 ──────────────────────────────────────────────────────────────────
 const WS_PORT       = 6520;
 const HTTP_PORT     = 6523;
-const LOCAL_AUTH_TOKEN = 'MoeKoeTL-2k7qFb9zXm4Nv3Wc8YhRtSjP0DlQn6Bo1';
 const AUTH_HEADER   = 'X-MoeKoe-Token';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -63,10 +62,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // 从 background 获取动态鉴权令牌
+    async function getAuthToken() {
+        try {
+            const response = await new Promise((resolve) => {
+                chrome.runtime.sendMessage({ type: 'getAuthToken' }, resolve);
+            });
+            return response ? response.token : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
     // 构造携带本地鉴权头的通用 fetch 选项（独立运行模式备用）
-    function buildAuthHeaders(extra) {
+    async function buildAuthHeaders(extra) {
+        const token = await getAuthToken();
         const headers = Object.assign({}, extra || {});
-        headers[AUTH_HEADER] = LOCAL_AUTH_TOKEN;
+        if (token) headers[AUTH_HEADER] = token;
         return headers;
     }
 
@@ -89,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => controller.abort(), 2000);
             const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/ping`, {
                 method: 'GET',
-                headers: buildAuthHeaders(),
+                headers: await buildAuthHeaders(),
                 signal: controller.signal
             });
             if (!r.ok) return false;
