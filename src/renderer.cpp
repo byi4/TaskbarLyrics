@@ -8,11 +8,13 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <thread>
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "urlmon.lib")
 
 namespace moekoe {
 
@@ -118,6 +120,33 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
             btnFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             btnFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
+        // 卡片模式文本格式（两行不同字号）
+        dwriteFactory_->CreateTextFormat(
+            family.c_str(), nullptr,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            std::max<FLOAT>(8.0f, settings_.cardCurrentFontSize),
+            L"zh-CN",
+            cardCurrentFormat_.GetAddressOf());
+        if (cardCurrentFormat_) {
+            cardCurrentFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            cardCurrentFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            cardCurrentFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        dwriteFactory_->CreateTextFormat(
+            family.c_str(), nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            std::max<FLOAT>(8.0f, settings_.cardNextFontSize),
+            L"zh-CN",
+            cardNextFormat_.GetAddressOf());
+        if (cardNextFormat_) {
+            cardNextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            cardNextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            cardNextFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
     }
 
     if (renderTarget_) {
@@ -128,6 +157,13 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.7f, 0.7f, 0.7f, 0.8f),
             translationBrush_.GetAddressOf());
+        // 卡片模式专用颜色画刷
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardCurrentColor, 1.0f),
+            cardCurrentBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardNextColor, 1.0f),
+            cardNextBrush_.GetAddressOf());
     }
 
     initialized_ = (renderTarget_ != nullptr);
@@ -175,6 +211,11 @@ void TaskbarRenderer::ApplySettings(const RendererSettings& s) {
 }
 
 void TaskbarRenderer::Shutdown() {
+    cardNextBrush_.Reset();
+    cardCurrentBrush_.Reset();
+    coverBitmap_.Reset();
+    cardNextFormat_.Reset();
+    cardCurrentFormat_.Reset();
     translationBrush_.Reset();
     highlightBrush_.Reset();
     normalBrush_.Reset();
@@ -198,6 +239,8 @@ void TaskbarRenderer::Resize(UINT width, UINT height, UINT dpi) {
         highlightBrush_.Reset();
         normalBrush_.Reset();
         translationBrush_.Reset();
+        cardCurrentBrush_.Reset();
+        cardNextBrush_.Reset();
         const D2D1_COLOR_F hi = ParseColor(settings_.highlightColor, 1.0f);
         const D2D1_COLOR_F no = ParseColor(settings_.normalColor, settings_.normalOpacity);
         renderTarget_->CreateSolidColorBrush(hi, highlightBrush_.GetAddressOf());
@@ -205,6 +248,12 @@ void TaskbarRenderer::Resize(UINT width, UINT height, UINT dpi) {
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.7f, 0.7f, 0.7f, 0.8f),
             translationBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardCurrentColor, 1.0f),
+            cardCurrentBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardNextColor, 1.0f),
+            cardNextBrush_.GetAddressOf());
     }
     // 重建按钮文字格式（高度可能变化）
     btnFormat_.Reset();
@@ -397,6 +446,159 @@ void TaskbarRenderer::DrawHoverControls(bool isPlaying) {
     renderTarget_->DrawTextW(L"\u23ED", 1, btnFormat_.Get(), nextRect, iconBrush.Get());
 }
 
+// ═════════════════════════════════════════
+// 卡片模式渲染（无卡拉OK效果）
+// ═════════════════════════════════════════
+
+void TaskbarRenderer::RenderCardStyle(const RenderState& state) {
+    const float dpiScale = static_cast<float>(dpi_) / 96.0f;
+    const float coverSize = static_cast<float>(settings_.cardCoverSize) * dpiScale;
+    const float gap = static_cast<float>(settings_.cardGap) * dpiScale;
+    const float paddingX = constants::TEXT_PADDING_X;
+
+    // ═════ 1. 绘制封面（左侧） ═════
+    std::string fallback = state.songName.empty()
+        ? "?"
+        : state.songName.substr(0, 1);
+    DrawCoverArt(state.coverArtUrl, fallback, paddingX,
+                 (static_cast<float>(height_) - coverSize) / 2.0f, coverSize);
+
+    // ═════ 2. 绘制双行歌词（封面右侧，无卡拉OK逐字效果） ═════
+    const float lyricsX = paddingX + coverSize + gap;
+    const float lyricsWidth = static_cast<float>(width_) - lyricsX - paddingX;
+
+    if (lyricsWidth > 10.0f) {
+        std::wstring curW = Utf8ToWide(state.currentLine);
+        std::wstring nextW = Utf8ToWide(state.nextLine);
+        DrawCardLyrics(curW, nextW, lyricsX, 0.0f, lyricsWidth);
+    }
+}
+
+void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fallbackChar,
+                                    float x, float y, float size) {
+    if (!renderTarget_ || size <= 0.0f) return;
+
+    const float dpiScale = static_cast<float>(dpi_) / 96.0f;
+    const float radius = constants::CARD_COVER_RADIUS_DP * dpiScale;
+
+    // ═════ 异步加载封面图 ═════
+    // URL 变更时启动后台线程下载（不阻塞渲染）
+    if (!url.empty() && url != cachedCoverUrl_ &&
+        !coverLoadInProgress_.load(std::memory_order_relaxed)) {
+        cachedCoverUrl_ = url;
+        coverBitmap_.Reset();
+        coverLoadInProgress_.store(true, std::memory_order_relaxed);
+
+        std::string targetUrl = url;
+        std::thread([this, targetUrl, size]() {
+            wchar_t tempPath[MAX_PATH] = {0};
+            ::GetTempPathW(MAX_PATH, tempPath);
+            wchar_t tempFile[MAX_PATH] = {0};
+            ::GetTempFileNameW(tempPath, L"mkl_", 0, tempFile);
+
+            std::wstring wUrl(targetUrl.begin(), targetUrl.end());
+            HRESULT hr = ::URLDownloadToFileW(nullptr, wUrl.c_str(), tempFile, 0, nullptr);
+            Microsoft::WRL::ComPtr<IWICBitmap> result;
+
+            if (SUCCEEDED(hr) && wicFactory_) {
+                Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+                hr = wicFactory_->CreateDecoderFromFilename(
+                    tempFile, nullptr, GENERIC_READ,
+                    WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf());
+                if (SUCCEEDED(hr)) {
+                    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+                    hr = decoder->GetFrame(0, frame.GetAddressOf());
+                    if (SUCCEEDED(hr)) {
+                        Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
+                        hr = wicFactory_->CreateBitmapScaler(scaler.GetAddressOf());
+                        if (SUCCEEDED(hr)) {
+                            UINT origW = 0, origH = 0;
+                            frame->GetSize(&origW, &origH);
+                            UINT targetSize = static_cast<UINT>(size * static_cast<float>(dpi_) / 96.0f);
+                            hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
+                                                      WICBitmapInterpolationModeFant);
+                            if (SUCCEEDED(hr)) {
+                                wicFactory_->CreateBitmapFromSource(
+                                    scaler.Get(), WICBitmapCacheOnDemand, result.GetAddressOf());
+                            }
+                        }
+                    }
+                }
+            }
+
+            ::DeleteFileW(tempFile);
+
+            // 存储结果到成员变量（线程安全：仅此写入线程 + 渲染线程读取）
+            coverBitmap_ = std::move(result);
+            coverLoadInProgress_.store(false, std::memory_order_release);
+        }).detach();
+    }
+
+    D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(
+        D2D1::RectF(x, y, x + size, y + size), radius, radius);
+
+    if (coverBitmap_) {
+        // 有封面位图：绘制圆角裁剪的图片
+        Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
+        renderTarget_->CreateBitmapFromWicBitmap(coverBitmap_.Get(), d2dBitmap.GetAddressOf());
+        if (d2dBitmap) {
+            Microsoft::WRL::ComPtr<ID2D1BitmapBrush> bitmapBrush;
+            renderTarget_->CreateBitmapBrush(d2dBitmap.Get(), bitmapBrush.GetAddressOf());
+            if (bitmapBrush) {
+                bitmapBrush->SetExtendModeX(D2D1_EXTEND_MODE_CLAMP);
+                bitmapBrush->SetExtendModeY(D2D1_EXTEND_MODE_CLAMP);
+                renderTarget_->FillRoundedRectangle(rr, bitmapBrush.Get());
+            }
+        }
+    } else {
+        // 无封面：显示音乐符号图标（清晰可见）
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bgBrush;
+        renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.55f, 0.55f, 0.6f, 0.65f), bgBrush.GetAddressOf());
+        if (bgBrush) {
+            renderTarget_->FillRoundedRectangle(rr, bgBrush.Get());
+        }
+
+        // 绘制音乐符号 ♪ (U+266A)
+        if (textFormat_) {
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> iconBrush;
+            renderTarget_->CreateSolidColorBrush(
+                D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.9f), iconBrush.GetAddressOf());
+            if (iconBrush) {
+                D2D1_RECT_F textRect = D2D1::RectF(x, y, x + size, y + size);
+                renderTarget_->DrawTextW(L"\u266A", 1, textFormat_.Get(),
+                                          textRect, iconBrush.Get());
+            }
+        }
+    }
+}
+
+void TaskbarRenderer::DrawCardLyrics(const std::wstring& currentLine,
+                                     const std::wstring& nextLine,
+                                     float x, float y, float availWidth) {
+    if (!renderTarget_) return;
+
+    const float h = static_cast<float>(height_);
+    const float midY = h * 0.50f;   // 当前行占上半部分
+
+    // ═════ 当前行：使用 cardCurrentColor（独立颜色，无阴影） ═════
+    if (!currentLine.empty() && cardCurrentFormat_ && cardCurrentBrush_) {
+        D2D1_RECT_F curLayout = D2D1::RectF(x, y, x + availWidth, y + midY);
+        renderTarget_->DrawTextW(
+            currentLine.c_str(), static_cast<UINT32>(currentLine.size()),
+            cardCurrentFormat_.Get(), curLayout, cardCurrentBrush_.Get());
+    }
+
+    // ═════ 下一行：使用 cardNextColor（独立颜色，无阴影） ═════
+    if (!nextLine.empty() && cardNextFormat_ && cardNextBrush_) {
+        float nextY = y + midY;
+        D2D1_RECT_F nextLayout = D2D1::RectF(x, nextY, x + availWidth, y + h);
+        renderTarget_->DrawTextW(
+            nextLine.c_str(), static_cast<UINT32>(nextLine.size()),
+            cardNextFormat_.Get(), nextLayout, cardNextBrush_.Get());
+    }
+}
+
 void TaskbarRenderer::PresentToLayeredWindow() {
     if (!wicBitmap_ || !hwnd_) return;
 
@@ -459,9 +661,12 @@ void TaskbarRenderer::PresentToLayeredWindow() {
 void TaskbarRenderer::Render(const RenderState& state) {
     if (!initialized_ || !renderTarget_) return;
 
-    // 跑马灯状态机更新（每帧调用，返回滚动偏移量）
+    // 跑马灯状态机更新（仅 karaoke 模式）
     bool marqueeNeedsRedraw = false;
-    float scrollOffset = UpdateMarquee(state.currentLine, static_cast<float>(state.progress), marqueeNeedsRedraw);
+    float scrollOffset = 0.0f;
+    if (settings_.displayMode != "card") {
+        scrollOffset = UpdateMarquee(state.currentLine, static_cast<float>(state.progress), marqueeNeedsRedraw);
+    }
 
     bool stateChanged = (state.hasLyrics != lastState_.hasLyrics ||
                          state.currentLine != lastState_.currentLine ||
@@ -469,6 +674,8 @@ void TaskbarRenderer::Render(const RenderState& state) {
                          state.isPlaying != lastState_.isPlaying ||
                          state.isHovering != lastState_.isHovering ||
                          state.isDragging != lastState_.isDragging ||
+                         state.nextLine != lastState_.nextLine ||
+                         state.coverArtUrl != lastState_.coverArtUrl ||
                          std::abs(state.progress - lastState_.progress) > 0.001);
     // 跑马灯滚动动画期间也需要重绘
     if (!stateChanged && !marqueeNeedsRedraw) {
@@ -497,17 +704,27 @@ void TaskbarRenderer::Render(const RenderState& state) {
         renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0.0f));
     }
 
-    if (state.hasLyrics && !state.currentLine.empty()) {
-        const std::wstring lineW = Utf8ToWide(state.currentLine);
-        DrawHighlightedTextPerCharacter(lineW, state.progress, settings_.enableKaraoke, scrollOffset);
-
-        if (settings_.enableTranslation && !state.currentTranslated.empty()) {
-            const std::wstring trW = Utf8ToWide(state.currentTranslated);
-            DrawTranslatedText(trW);
+    if (settings_.displayMode == "card") {
+        // ═════ 卡片样式渲染路径 ═════
+        if (state.hasLyrics && !state.currentLine.empty()) {
+            RenderCardStyle(state);
+        } else if (state.isPlaying) {
+            DrawCentered(L"...", normalBrush_.Get(), 0.0f);
         }
     } else {
-        if (state.isPlaying) {
-            DrawCentered(L"...", normalBrush_.Get(), 0.0f);
+        // ═════ 现有卡拉OK渲染路径（不变） ═════
+        if (state.hasLyrics && !state.currentLine.empty()) {
+            const std::wstring lineW = Utf8ToWide(state.currentLine);
+            DrawHighlightedTextPerCharacter(lineW, state.progress, settings_.enableKaraoke, scrollOffset);
+
+            if (settings_.enableTranslation && !state.currentTranslated.empty()) {
+                const std::wstring trW = Utf8ToWide(state.currentTranslated);
+                DrawTranslatedText(trW);
+            }
+        } else {
+            if (state.isPlaying) {
+                DrawCentered(L"...", normalBrush_.Get(), 0.0f);
+            }
         }
     }
 

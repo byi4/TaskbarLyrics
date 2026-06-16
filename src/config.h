@@ -21,6 +21,17 @@ struct AppearanceConfig {
     bool        enableKaraoke{true};
     bool        enableTranslation{true};
 
+    // 显示模式: "karaoke" (默认,现有单行卡拉OK) | "card" (卡片样式)
+    std::string displayMode{"karaoke"};
+
+    // 卡片模式专用字号（与 font_size 独立）
+    int         cardFontSizeCurrent{18};   // 当前行字号（卡片模式）
+    int         cardFontSizeNext{14};      // 下一行字号（卡片模式）
+
+    // 卡片模式专用颜色（独立于 highlightColor / normalColor）
+    std::string cardCurrentColor{"#FFFFFF"};  // 当前行文字颜色
+    std::string cardNextColor{"#AAAAAA"};     // 下一行文字颜色
+
     // 跑马灯（长歌词滚动）配置
     bool        enableMarquee{true};           // 是否启用跑马灯
     std::string marqueeMode{"bounce"};        // bounce=往返 / loop=循环 / off=关闭

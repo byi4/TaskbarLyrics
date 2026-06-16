@@ -133,6 +133,11 @@ bool Config::Load() {
             appearance_.enableKaraoke     = a.value("enable_karaoke",    appearance_.enableKaraoke);
             appearance_.enableTranslation = a.value("enable_translation", appearance_.enableTranslation);
             appearance_.enableMarquee     = a.value("enable_marquee",    appearance_.enableMarquee);
+            appearance_.displayMode       = a.value("display_mode",      appearance_.displayMode);
+            appearance_.cardFontSizeCurrent = a.value("card_font_size_current", appearance_.cardFontSizeCurrent);
+            appearance_.cardFontSizeNext    = a.value("card_font_size_next",    appearance_.cardFontSizeNext);
+            appearance_.cardCurrentColor     = a.value("card_current_color",   appearance_.cardCurrentColor);
+            appearance_.cardNextColor        = a.value("card_next_color",      appearance_.cardNextColor);
             appearance_.marqueeMode       = a.value("marquee_mode",      appearance_.marqueeMode);
             appearance_.marqueeDelayMs    = a.value("marquee_delay_ms",  appearance_.marqueeDelayMs);
             appearance_.marqueePauseMs    = a.value("marquee_pause_ms",  appearance_.marqueePauseMs);
@@ -157,7 +162,9 @@ bool Config::Load() {
 
         // 范围验证：将异常值 clamp 到合理区间
         appearance_.normalOpacity       = std::clamp(appearance_.normalOpacity, 0.0, 1.0);
-        appearance_.fontSize            = std::clamp(appearance_.fontSize, 8, 72);
+        appearance_.fontSize            = std::clamp(appearance_.fontSize, 10, 28);
+        appearance_.cardFontSizeCurrent  = std::clamp(appearance_.cardFontSizeCurrent, 10, 20);
+        appearance_.cardFontSizeNext     = std::clamp(appearance_.cardFontSizeNext, 8, 18);
         appearance_.marqueeDelayMs      = std::clamp(appearance_.marqueeDelayMs, 0, 10000);
         appearance_.marqueePauseMs      = std::clamp(appearance_.marqueePauseMs, 0, 10000);
         appearance_.marqueeSpeedPxPerSec = std::clamp(appearance_.marqueeSpeedPxPerSec, 10.0f, 500.0f);
@@ -206,6 +213,11 @@ bool Config::Save() const {
         {"enable_karaoke",     appearance_.enableKaraoke},
         {"enable_translation", appearance_.enableTranslation},
         {"enable_marquee",     appearance_.enableMarquee},
+        {"display_mode",       appearance_.displayMode},
+        {"card_font_size_current", appearance_.cardFontSizeCurrent},
+        {"card_font_size_next",    appearance_.cardFontSizeNext},
+        {"card_current_color",     appearance_.cardCurrentColor},
+        {"card_next_color",        appearance_.cardNextColor},
         {"marquee_mode",       appearance_.marqueeMode},
         {"marquee_delay_ms",   appearance_.marqueeDelayMs},
         {"marquee_pause_ms",   appearance_.marqueePauseMs},

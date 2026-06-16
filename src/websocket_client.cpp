@@ -391,12 +391,20 @@ void WebSocketClient::DispatchWsMessage(const std::string& raw) {
                     if (cs.is_string()) {
                         st.songTitle = cs.get<std::string>();
                     } else if (cs.is_object()) {
-                        // object 格式: {name, artist, ...}
+                        // object 格式: {name, artist, pic, ...}
                         if (cs.contains("name") && cs["name"].is_string()) {
                             st.songTitle = cs["name"].get<std::string>();
+                            st.songName = cs["name"].get<std::string>();
                         }
                         if (cs.contains("artist") && cs["artist"].is_string()) {
                             st.songTitle += " - " + cs["artist"].get<std::string>();
+                        }
+                        // 提取专辑封面 URL（尝试已知字段名）
+                        for (const auto& key : {"pic", "cover", "albumArt", "image", "poster", "img", "album_pic"}) {
+                            if (cs.contains(key) && cs[key].is_string()) {
+                                st.coverArtUrl = cs[key].get<std::string>();
+                                break;
+                            }
                         }
                     }
                 }

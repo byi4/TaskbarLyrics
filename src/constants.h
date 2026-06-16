@@ -92,6 +92,27 @@ constexpr int MIN_WINDOW_WIDTH = 50;
 constexpr int VERTICAL_TASKBAR_LYRIC_WIDTH_BASE_DP = 180;
 
 // ═══════════════════════════════════════
+// 卡片模式（Card Style）尺寸常量
+// ═══════════════════════════════════════
+
+/// 卡片模式窗口高度（96 DPI 基础值）—— 双行需要更多高度
+constexpr int CARD_HEIGHT_BASE_DP = 42;
+
+/// 卡片模式最小宽度基础值（96 DPI）
+constexpr int CARD_MIN_WIDTH_BASE_DP = 180;
+
+/// 卡片封面尺寸（96 DPI）
+constexpr int CARD_COVER_SIZE_DP = 34;
+
+/// 卡片封面圆角半径（96 DPI）
+constexpr float CARD_COVER_RADIUS_DP = 6.0f;
+
+/// 卡片模式文字阴影偏移 X（像素）
+constexpr float CARD_TEXT_SHADOW_OFFSET_X = 0.0f;
+/// 卡片模式文字阴影偏移 Y（像素）
+constexpr float CARD_TEXT_SHADOW_OFFSET_Y = 1.0f;
+
+// ═══════════════════════════════════════
 // UI / 渲染细节
 // ═══════════════════════════════════════
 

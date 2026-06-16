@@ -76,6 +76,13 @@ void ApplyRendererSettings(AppContext& app) {
     rs.marqueePauseMs    = app.config->Appearance().marqueePauseMs;
     rs.marqueeSpeedPxPerSec = app.config->Appearance().marqueeSpeedPxPerSec;
 
+    // 卡片模式配置
+    rs.displayMode           = app.config->Appearance().displayMode;
+    rs.cardCurrentFontSize   = static_cast<float>(app.config->Appearance().cardFontSizeCurrent);
+    rs.cardNextFontSize      = static_cast<float>(app.config->Appearance().cardFontSizeNext);
+    rs.cardCurrentColor      = app.config->Appearance().cardCurrentColor;
+    rs.cardNextColor         = app.config->Appearance().cardNextColor;
+
     Log("[CONFIG] ApplyRenderer: hl=%s nl=%s font=%s size=%d opacity=%.2f\n",
         rs.highlightColor.c_str(), rs.normalColor.c_str(),
         rs.fontFamily.c_str(), rs.fontSize, rs.normalOpacity);
@@ -138,11 +145,13 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
             app.settingsWindow = new moekoe::SettingsWindow();
             app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
                 // 将 WebView2 设置界面更新的配置同步到主 config 对象
+                // 注意：保留当前位置偏移，避免保存设置时重置位置
+                const auto savedPos = app.config->Position();
                 *app.config = cfg;
+                app.config->MutablePosition() = savedPos;
                 ApplyRendererSettings(app);
                 if (app.taskbarWindow) {
-                    app.taskbarWindow->SetDragOffset(
-                        cfg.Position().offsetX, cfg.Position().offsetY);
+                    app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
                     app.taskbarWindow->Reposition();
                 }
                 // 同步托盘菜单状态
@@ -441,6 +450,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     // 应用配置中的位置偏移
     taskbarWindow.SetDragOffset(config.Position().offsetX, config.Position().offsetY);
+
+    // 应用配置中的显示模式
+    taskbarWindow.SetDisplayMode(config.Appearance().displayMode);
 
     // 应用配置中的锁定状态
     taskbarWindow.SetPositionLocked(config.Position().lockPosition);

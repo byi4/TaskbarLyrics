@@ -110,6 +110,15 @@ RenderState LyricsParser::GetCurrentRenderState() const {
     out.currentLine      = line.text;
     out.currentTranslated= line.translated;
 
+    // 卡片模式：输出下一行歌词预览
+    if (idx + 1 < static_cast<int>(lyrics_.lines.size())) {
+        out.nextLine = lyrics_.lines[idx + 1].text;
+    }
+
+    // 传递封面 URL 和歌曲名（来自 PlayerState）
+    out.coverArtUrl = state_.coverArtUrl;
+    out.songName    = state_.songName;
+
     // 在该行内计算字符级进度
     if (!line.characters.empty()) {
         const int64_t tMs = static_cast<int64_t>(effectiveTime * 1000.0);

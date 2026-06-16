@@ -536,13 +536,24 @@ void SettingsWindow::ApplyConfigFromJson(void* jsonPtr) {
             a.value("marquee_pause_ms", currentConfig_.Appearance().marqueePauseMs);
         currentConfig_.MutableAppearance().marqueeSpeedPxPerSec =
             static_cast<float>(a.value("marquee_speed_px_per_sec", static_cast<double>(currentConfig_.Appearance().marqueeSpeedPxPerSec)));
+        currentConfig_.MutableAppearance().displayMode =
+            a.value("display_mode", currentConfig_.Appearance().displayMode);
+        currentConfig_.MutableAppearance().cardFontSizeCurrent =
+            a.value("card_font_size_current", currentConfig_.Appearance().cardFontSizeCurrent);
+        currentConfig_.MutableAppearance().cardFontSizeNext =
+            a.value("card_font_size_next", currentConfig_.Appearance().cardFontSizeNext);
+        currentConfig_.MutableAppearance().cardCurrentColor =
+            a.value("card_current_color", currentConfig_.Appearance().cardCurrentColor);
+        currentConfig_.MutableAppearance().cardNextColor =
+            a.value("card_next_color", currentConfig_.Appearance().cardNextColor);
     }
     if (c.contains("position")) {
         const auto& p = c["position"];
-        currentConfig_.MutablePosition().offsetX = p.value("offset_x", 0);
-        currentConfig_.MutablePosition().offsetY = p.value("offset_y", 0);
-        currentConfig_.MutablePosition().lockPosition = p.value("lock_position", false);
-        currentConfig_.MutablePosition().lockFully = p.value("lock_fully", false);
+        currentConfig_.MutablePosition().offsetX = p.value("offset_x", currentConfig_.Position().offsetX);
+        currentConfig_.MutablePosition().offsetY = p.value("offset_y", currentConfig_.Position().offsetY);
+        // 仅当 JSON 中明确提供时才覆盖锁定状态，避免每次保存都重置为 false
+        if (p.contains("lock_position")) currentConfig_.MutablePosition().lockPosition = p["lock_position"].get<bool>();
+        if (p.contains("lock_fully")) currentConfig_.MutablePosition().lockFully = p["lock_fully"].get<bool>();
     }
     if (c.contains("advanced")) {
         const auto& a = c["advanced"];
@@ -583,6 +594,11 @@ void SettingsWindow::SendConfigToWebView(const Config& cfg) {
             {"marquee_delay_ms", cfg.Appearance().marqueeDelayMs},
             {"marquee_pause_ms", cfg.Appearance().marqueePauseMs},
             {"marquee_speed_px_per_sec", cfg.Appearance().marqueeSpeedPxPerSec},
+            {"display_mode", cfg.Appearance().displayMode},
+            {"card_font_size_current", cfg.Appearance().cardFontSizeCurrent},
+            {"card_font_size_next", cfg.Appearance().cardFontSizeNext},
+            {"card_current_color", cfg.Appearance().cardCurrentColor},
+            {"card_next_color", cfg.Appearance().cardNextColor},
         }},
         {"position", {
             {"offset_x", cfg.Position().offsetX},

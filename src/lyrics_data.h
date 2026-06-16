@@ -41,6 +41,8 @@ struct PlayerState {
     bool        isPlaying{false};
     double      currentTime{0.0};   // 秒
     std::string songTitle;           // 可选,用于调试
+    std::string coverArtUrl;         // 专辑封面 URL（可能为空）
+    std::string songName;            // 歌曲名称（用于封面降级显示）
 };
 
 // 悬停时点击的控制按钮
@@ -62,6 +64,11 @@ struct RenderState {
     double      currentTime{0.0};     // 秒
     bool        isHovering{false};    // 鼠标是否悬停在歌词窗口上
     bool        isDragging{false};    // 是否正在拖动歌词窗口
+
+    // 卡片模式专用
+    std::string nextLine;             // 下一行歌词文本（预览）
+    std::string coverArtUrl;          // 专辑封面 URL（可能为空）
+    std::string songName;             // 歌曲名称（用于封面降级显示）
 };
 
 } // namespace moekoe

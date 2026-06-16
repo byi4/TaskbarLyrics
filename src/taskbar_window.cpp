@@ -198,8 +198,11 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         hChild = ::GetWindow(hChild, GW_HWNDNEXT);
     }
 
-    // 歌词区尺寸
-    const int lyricH = ::MulDiv(constants::LYRIC_HEIGHT_BASE_DP, info_.dpi, 96);
+    // 歌词区尺寸（根据显示模式选择不同的高度）
+    const bool isCardMode = (displayMode_ == "card");
+    const int lyricH = ::MulDiv(
+        isCardMode ? constants::CARD_HEIGHT_BASE_DP : constants::LYRIC_HEIGHT_BASE_DP,
+        info_.dpi, 96);
     int w = 0, h = lyricH, x = 0, y = 0;
 
     // 找到关键子窗口的位置 (屏幕坐标)
@@ -240,7 +243,9 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         if (foundTray) rightEdge = trayRect.left;
 
         // 歌词窗口最大宽度
-        const int maxLyricWidth = ::MulDiv(constants::MAX_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
+        const int maxLyricWidth = ::MulDiv(
+            isCardMode ? constants::CARD_MIN_WIDTH_BASE_DP * 2 : constants::MAX_LYRIC_WIDTH_BASE_DP,
+            info_.dpi, 96);
         int availableWidth = rightEdge - tbRect.left;
         if (foundTaskList) {
             availableWidth = rightEdge - taskListRect.right;
@@ -256,7 +261,9 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         int rightEdge = tbRect.right;
         if (foundTray) rightEdge = trayRect.left;
 
-        const int maxLyricWidth = ::MulDiv(constants::MAX_LYRIC_WIDTH_BASE_DP, info_.dpi, 96);
+        const int maxLyricWidth = ::MulDiv(
+            isCardMode ? constants::CARD_MIN_WIDTH_BASE_DP * 2 : constants::MAX_LYRIC_WIDTH_BASE_DP,
+            info_.dpi, 96);
         int availableWidth = rightEdge - tbRect.left;
         if (foundTaskList) {
             availableWidth = rightEdge - taskListRect.right;

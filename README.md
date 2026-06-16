@@ -5,7 +5,7 @@
 <h1 align="center">MoeKoeMusic TaskbarLyrics</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/release-v0.4.0-blue" alt="release" />
+  <img src="https://img.shields.io/badge/release-v0.4.1-blue" alt="release" />
   <img src="https://img.shields.io/badge/license-GPL--2.0-orange" alt="license" />
 
 </p>
@@ -27,6 +27,7 @@
 - **6 种预设主题色** — 一键切换高亮颜色和普通歌词颜色
 - **跑马灯滚动** — 长歌词自动滚动（bounce / loop / off 三种模式）
 - **WebView2 设置界面** — 现代化 UI，暗色模式自动切换，实时预览
+- **卡片样式显示** — 双行歌词 + 封面图标（可选），无卡拉OK效果，独立字号和颜色配置
 
 ## 使用方式
 
@@ -72,6 +73,26 @@ cmake --build --preset x64-Release
 ```
 
 > **注意**：由于 ixwebsocket 预编译库使用 MSVC 14.44 编译，项目需要使用相同版本工具集。`CMakePresets.json` 已配置自动传递 `/p:PlatformToolsetVersion=14.44.35207`。
+
+## v0.4.1 变更
+
+### 新增：卡片样式显示模式
+
+参考 [ANYNC/TaskbarLyrics](https://github.com/ANYNC/TaskbarLyrics) 的视觉风格，新增可切换的卡片样式显示模式：
+
+- **双行歌词布局** — 当前行 + 下一行预览，无卡拉OK逐字效果
+- **封面图标区域** — 左侧显示专辑封面（支持异步下载）或音乐符号降级图标
+- **独立字号配置** — 当前行（10~20pt）和下一行（8~18pt）字号独立可调
+- **独立颜色配置** — 当前行/下一行文字颜色分别可自定义
+- **无文字阴影** — 卡片模式使用纯色绘制，避免黑边问题
+- **设置界面分组** — 切换显示模式时，仅显示当前模式的选项
+
+### 修复
+
+- 修复切换显示模式后保存导致位置重置的问题
+- 修复 `display_mode` 等字段未在 C++ 配置同步中传递的 bug
+- 封面图下载改为异步（`std::thread`），不再阻塞渲染线程
+- 移除位置偏移滑块（拖动窗口直接调整更直观），保留重置按钮
 
 ## v0.4.0 变更
 

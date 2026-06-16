@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <string>
+#include <atomic>
 
 namespace moekoe {
 
@@ -30,6 +31,21 @@ struct RendererSettings {
     int         marqueeDelayMs{2000};
     int         marqueePauseMs{1000};
     float       marqueeSpeedPxPerSec{40.0f};
+
+    // 显示模式: "karaoke" (默认) | "card" (卡片样式)
+    std::string displayMode{"karaoke"};
+
+    // 卡片模式专用字号（独立于 fontSize）
+    float       cardCurrentFontSize{18.0f};    // 当前行字号
+    float       cardNextFontSize{14.0f};       // 下一行字号
+
+    // 卡片模式专用颜色（独立于 highlightColor / normalColor）
+    std::string cardCurrentColor{"#FFFFFF"};   // 当前行文字颜色
+    std::string cardNextColor{"#AAAAAA"};      // 下一行文字颜色
+
+    // 卡片模式布局参数
+    int         cardCoverSize{34};             // 封面尺寸 (dp, 会按 DPI 缩放)
+    int         cardGap{8};                    // 封面与文字间距 (dp)
 };
 
 class TaskbarRenderer {
@@ -56,6 +72,14 @@ private:
     void DrawCentered(const std::wstring& text, ID2D1Brush* brush, float yOffset);
     void DrawHoverControls(bool isPlaying);
     void PresentToLayeredWindow();
+
+    // ═════ 卡片模式渲染（无卡拉OK效果） ═════
+    void RenderCardStyle(const RenderState& state);
+    void DrawCoverArt(const std::string& url, const std::string& fallbackChar,
+                      float x, float y, float size);
+    void DrawCardLyrics(const std::wstring& currentLine,
+                        const std::wstring& nextLine,
+                        float x, float y, float availWidth);
 
     static D2D1_COLOR_F ParseColor(const std::string& hex, float alpha = 1.0f);
 
@@ -123,6 +147,23 @@ private:
     float          marqueeTextWidth_{0.0f};       // 当前歌词文本的像素宽度（缓存）
     float          marqueeMaxOffset_{0.0f};       // 最大可滚动偏移量 = textWidth - availableWidth
     float          marqueeProgress_{0.0f};         // 当前歌词高亮进度 [0.0, 1.0]，用于控制回位时机
+
+    // ═══════════════════════════════
+    // 卡片模式成员
+    // ═══════════════════════════════
+
+    // 卡片模式专用的 DirectWrite 文本格式（两行不同字号）
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> cardCurrentFormat_;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> cardNextFormat_;
+
+    // 封面图缓存
+    Microsoft::WRL::ComPtr<IWICBitmap> coverBitmap_;
+    std::string cachedCoverUrl_;
+    std::atomic<bool> coverLoadInProgress_{false};
+
+    // 卡片模式专用颜色画刷
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardCurrentBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardNextBrush_;
 };
 
 } // namespace moekoe
