@@ -450,6 +450,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     // 应用配置中的位置偏移
     taskbarWindow.SetDragOffset(config.Position().offsetX, config.Position().offsetY);
+    taskbarWindow.Reposition();
 
     // 应用配置中的显示模式
     taskbarWindow.SetDisplayMode(config.Appearance().displayMode);
@@ -494,6 +495,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     app.wsClient = &wsClient;
 
     wsClient.OnLyrics([&](const moekoe::LyricsData& data) {
+        Log("[WS] OnLyrics: valid=%d lines=%zu\n", data.valid, data.lines.size());
         parser.UpdateLyrics(data);
         if (app.taskbarWindow && data.valid) {
             HWND h = taskbarWindow.GetHandle();
@@ -503,6 +505,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         }
     });
     wsClient.OnPlayerState([&](const moekoe::PlayerState& st) {
+        Log("[WS] OnPlayerState: playing=%d time=%.2f song='%s'\n", st.isPlaying, st.currentTime, st.songTitle.c_str());
         parser.UpdatePlayerState(st);
     });
     wsClient.OnConnectionStatus([&](bool connected) {
@@ -609,6 +612,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     // ═══════ 第 5 阶段：清理和退出 ═══════
     // 目的：释放所有资源，进行优雅关闭
     // 注意：顺序与初始化相反（后创建的先销毁）
+
+    // 退出前保存最终位置偏移（避免拖动后未触发 hover 变化导致位置丢失）
+    if (app.taskbarWindow) {
+        config.MutablePosition().offsetX = app.taskbarWindow->GetDragOffsetX();
+        config.MutablePosition().offsetY = app.taskbarWindow->GetDragOffsetY();
+    }
+    config.Save();
+
     ::KillTimer(hMsgWnd, 1);
     httpServer.Stop();
     wsClient.Disconnect();

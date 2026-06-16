@@ -3,6 +3,7 @@
 // 完全透明背景: WIC + UpdateLayeredWindow + 逐字高亮
 #include "renderer.h"
 #include "constants.h"
+#include "logger.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -483,10 +484,11 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
 
     // ═════ 异步加载封面图 ═════
     // URL 变更时启动后台线程下载（不阻塞渲染）
+    // 注意：不在此时清空 coverBitmap_，等下载成功后再替换，
+    //       避免 URL 无效时 fallback 灰底+音符被清除导致封面区域变空白
     if (!url.empty() && url != cachedCoverUrl_ &&
         !coverLoadInProgress_.load(std::memory_order_relaxed)) {
         cachedCoverUrl_ = url;
-        coverBitmap_.Reset();
         coverLoadInProgress_.store(true, std::memory_order_relaxed);
 
         std::string targetUrl = url;
@@ -512,9 +514,11 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
                         Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
                         hr = wicFactory_->CreateBitmapScaler(scaler.GetAddressOf());
                         if (SUCCEEDED(hr)) {
-                            UINT origW = 0, origH = 0;
-                            frame->GetSize(&origW, &origH);
-                            UINT targetSize = static_cast<UINT>(size * static_cast<float>(dpi_) / 96.0f);
+                UINT origW = 0, origH = 0;
+                frame->GetSize(&origW, &origH);
+                // size 参数已由调用方按 DPI 缩放过（RenderCardStyle 中 coverSize = cardCoverSize * dpiScale），
+                // 此处直接使用，无需再次乘以 dpi_/96
+                UINT targetSize = static_cast<UINT>(size + 0.5f);
                             hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
                                                       WICBitmapInterpolationModeFant);
                             if (SUCCEEDED(hr)) {
@@ -551,19 +555,19 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
             }
         }
     } else {
-        // 无封面：显示音乐符号图标（清晰可见）
+        // 无封面：显示灰底圆角矩形 + 音乐符号
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bgBrush;
         renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(0.55f, 0.55f, 0.6f, 0.65f), bgBrush.GetAddressOf());
+            D2D1::ColorF(0.45f, 0.45f, 0.5f, 0.85f), bgBrush.GetAddressOf());
         if (bgBrush) {
             renderTarget_->FillRoundedRectangle(rr, bgBrush.Get());
         }
 
-        // 绘制音乐符号 ♪ (U+266A)
+        // 使用较大的字体绘制音乐符号，确保清晰可见
         if (textFormat_) {
             Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> iconBrush;
             renderTarget_->CreateSolidColorBrush(
-                D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.9f), iconBrush.GetAddressOf());
+                D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), iconBrush.GetAddressOf());
             if (iconBrush) {
                 D2D1_RECT_F textRect = D2D1::RectF(x, y, x + size, y + size);
                 renderTarget_->DrawTextW(L"\u266A", 1, textFormat_.Get(),
@@ -602,10 +606,18 @@ void TaskbarRenderer::DrawCardLyrics(const std::wstring& currentLine,
 void TaskbarRenderer::PresentToLayeredWindow() {
     if (!wicBitmap_ || !hwnd_) return;
 
+    // 检查窗口是否可见
+    if (!::IsWindowVisible(hwnd_)) {
+        return;
+    }
+
     WICRect rcLock = { 0, 0, static_cast<INT>(width_), static_cast<INT>(height_) };
     Microsoft::WRL::ComPtr<IWICBitmapLock> lock;
     HRESULT hr = wicBitmap_->Lock(&rcLock, WICBitmapLockRead, lock.GetAddressOf());
-    if (FAILED(hr)) return;
+    if (FAILED(hr)) {
+        Log("[PRESENT] Lock failed: 0x%08X\n", hr);
+        return;
+    }
 
     UINT cbStride = 0, cbSize = 0;
     BYTE* pData = nullptr;
@@ -646,7 +658,7 @@ void TaskbarRenderer::PresentToLayeredWindow() {
         bf.SourceConstantAlpha = 255;
         bf.AlphaFormat         = AC_SRC_ALPHA;
 
-        ::UpdateLayeredWindow(
+        BOOL result = ::UpdateLayeredWindow(
             hwnd_, hdcScreen, &ptDst, &sz,
             hdcMem, &ptSrc, 0, &bf, ULW_ALPHA);
 
@@ -678,7 +690,10 @@ void TaskbarRenderer::Render(const RenderState& state) {
                          state.coverArtUrl != lastState_.coverArtUrl ||
                          std::abs(state.progress - lastState_.progress) > 0.001);
     // 跑马灯滚动动画期间也需要重绘
-    if (!stateChanged && !marqueeNeedsRedraw) {
+    // 卡片模式无跑马灯：无封面图时每帧重绘（确保 fallback 始终可见），
+    // 有封面图后按需重绘（state 变化时才更新）
+    const bool needCardRedraw = (settings_.displayMode == "card" && !coverBitmap_);
+    if (!stateChanged && !marqueeNeedsRedraw && !needCardRedraw) {
         return;
     }
     lastState_ = state;

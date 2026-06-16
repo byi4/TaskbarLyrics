@@ -35,13 +35,13 @@ MoeKoeMusic 是一款基于 Electron + Vue 3 的开源音乐播放器，其 Wind
 
 ### 1.3 设计原则
 
-| 原则        | 说明                                     |
-| --------- | -------------------------------------- |
-| **零侵入**   | 不修改 MoeKoeMusic 本体任何文件，独立 EXE 运行       |
-| **独立维护**  | 插件可脱离主程序版本独立迭代                         |
-| **轻量高效**  | CPU 占用 < 2%，内存占用 < 20MB                |
+| 原则        | 说明                                        |
+| --------- | ----------------------------------------- |
+| **零侵入**   | 不修改 MoeKoeMusic 本体任何文件，独立 EXE 运行          |
+| **独立维护**  | 插件可脱离主程序版本独立迭代                            |
+| **轻量高效**  | CPU 占用 < 2%，内存占用 < 20MB                   |
 | **用户友好**  | 即开即用，系统托盘右键菜单控制锁定/设置/退出，WebView2 GUI 设置界面 |
-| **覆盖任务栏** | 独立浮动窗口 + WS\_EX\_TOPMOST，视觉上与任务栏融合     |
+| **覆盖任务栏** | 独立浮动窗口 + WS\_EX\_TOPMOST，视觉上与任务栏融合        |
 
 ### 1.4 数据获取策略
 
@@ -165,20 +165,20 @@ EXE stdout (JSON Lines) → Electron Main Process → native-host-message IPC
 
 ### 2.2 核心技术栈
 
-| 层级      | 技术                             | 用途                                  |
-| ------- | ------------------------------ | ----------------------------------- |
-| 窗口系统    | Win32 API                      | 创建浮动窗口、消息循环、DPI 感知                  |
-| 图形渲染    | **Direct2D** + **DirectWrite** | GPU 加速的文字渲染（WIC BitmapRenderTarget） |
-| 内嵌浏览器   | **WebView2** (Edge Chromium)   | GUI 设置界面（可回退 Win32 对话框）             |
-| 通信协议    | **WebSocket**（RFC 6455）        | 从 MoeKoeMusic 获取实时数据                |
-| 托管通信    | **JSON Lines** (stdin/stdout)     | Native Host 与 MoeKoeMusic 主进程通信（v0.4.0） |
-| 回退通信    | **HTTP** (:6523)               | 独立模式下 Chrome Extension popup.js 通信        |
-| Bridge 通信  | **chrome.runtime.Port**          | background.js ↔ native-bridge.js 双向长连接（v0.4.0）|
-| 网络库     | **ixwebsocket**                | 轻量 C++ WebSocket 客户端库               |
-| JSON 解析 | **nlohmann/json**              | 配置文件 / WS 消息解析 / Native Host 协议       |
-| 配置持久化   | JSON 文件 + Windows 注册表          | 用户首选项 + 开机自启                        |
-| 系统托盘    | Win32 Shell API                | 托盘图标 + 右键菜单                         |
-| 常量管理    | **constants.h**                | 集中管理所有魔数                            |
+| 层级        | 技术                             | 用途                                             |
+| --------- | ------------------------------ | ---------------------------------------------- |
+| 窗口系统      | Win32 API                      | 创建浮动窗口、消息循环、DPI 感知                             |
+| 图形渲染      | **Direct2D** + **DirectWrite** | GPU 加速的文字渲染（WIC BitmapRenderTarget）            |
+| 内嵌浏览器     | **WebView2** (Edge Chromium)   | GUI 设置界面（可回退 Win32 对话框）                        |
+| 通信协议      | **WebSocket**（RFC 6455）        | 从 MoeKoeMusic 获取实时数据                           |
+| 托管通信      | **JSON Lines** (stdin/stdout)  | Native Host 与 MoeKoeMusic 主进程通信（v0.4.0）        |
+| 回退通信      | **HTTP** (:6523)               | 独立模式下 Chrome Extension popup.js 通信             |
+| Bridge 通信 | **chrome.runtime.Port**        | background.js ↔ native-bridge.js 双向长连接（v0.4.0） |
+| 网络库       | **ixwebsocket**                | 轻量 C++ WebSocket 客户端库                          |
+| JSON 解析   | **nlohmann/json**              | 配置文件 / WS 消息解析 / Native Host 协议                |
+| 配置持久化     | JSON 文件 + Windows 注册表          | 用户首选项 + 开机自启                                   |
+| 系统托盘      | Win32 Shell API                | 托盘图标 + 右键菜单                                    |
+| 常量管理      | **constants.h**                | 集中管理所有魔数                                       |
 
 ### 2.3 关键性能目标
 
@@ -194,26 +194,26 @@ EXE stdout (JSON Lines) → Electron Main Process → native-host-message IPC
 
 所有魔数集中定义在 `src/constants.h`，使用 `namespace moekoe::constants` 组织：
 
-| 分类  | 常量名                         | 值      | 用途            |
-| --- | --------------------------- | ------ | ------------- |
-| 端口  | `WEBSOCKET_LISTEN_PORT`     | 6520   | WS 歌词数据       |
-| 端口  | `HTTP_SERVER_PORT`          | 6523   | Extension 通信（默认值，可通过 config 覆盖） |
-| 鉴权  | `LOCAL_AUTH_TOKEN`           | —      | 本地共享密钥（`X-MoeKoe-Token` 头值） |
-| 鉴权  | `LOCAL_AUTH_HEADER_NAME`     | `X-MoeKoe-Token` | HTTP 鉴权头名称 |
-| 渲染  | `MIN_FRAME_INTERVAL_MS`     | 15     | 最小帧间隔         |
-| 尺寸  | `LYRIC_HEIGHT_BASE_DP`      | 28     | 歌词高度(96DPI基准) |
-| 尺寸  | `MAX_LYRIC_WIDTH_BASE_DP`   | 360    | 歌词最大宽度        |
-| UI  | `TEXT_PADDING_X`            | 20.0f  | 文本左右内边距       |
-| UI  | `BUTTON_SPACING`            | 2.0f   | 控制按钮间距        |
-| 消息号 | `WM_TRAY_CALLBACK`          | 0x0600 | 托盘回调          |
-| 消息号 | `WM_RENDER_UPDATE`          | 0x0700 | 渲染更新请求        |
-| 消息号 | `WM_PROCESS_EXITED`         | 0x0800 | 进程退出通知        |
-| 安全  | `MAX_WS_MESSAGE_SIZE`       | 1MB    | WS 消息大小上限     |
-| 系统  | `WINDOWS_TOOLTIP_MAX_LEN`   | 127    | Tooltip 最大长度  |
-| 跑马灯 | `MARQUEE_DELAY_MS`          | 2000   | 滚动前延迟（ms）     |
-| 跑马灯 | `MARQUEE_PAUSE_MS`          | 1000   | 滚动后暂停（ms）     |
-| 跑马灯 | `MARQUEE_SPEED_PX_PER_SEC`  | 40     | 默认滚动速度（px/s）  |
-| 跑马灯 | `MARQUEE_SPEEDUP_THRESHOLD` | 2.0f   | 超长歌词加速阈值（倍数）  |
+| 分类  | 常量名                         | 值                | 用途                              |
+| --- | --------------------------- | ---------------- | ------------------------------- |
+| 端口  | `WEBSOCKET_LISTEN_PORT`     | 6520             | WS 歌词数据                         |
+| 端口  | `HTTP_SERVER_PORT`          | 6523             | Extension 通信（默认值，可通过 config 覆盖） |
+| 鉴权  | `LOCAL_AUTH_TOKEN`          | —                | 本地共享密钥（`X-MoeKoe-Token` 头值）     |
+| 鉴权  | `LOCAL_AUTH_HEADER_NAME`    | `X-MoeKoe-Token` | HTTP 鉴权头名称                      |
+| 渲染  | `MIN_FRAME_INTERVAL_MS`     | 15               | 最小帧间隔                           |
+| 尺寸  | `LYRIC_HEIGHT_BASE_DP`      | 28               | 歌词高度(96DPI基准)                   |
+| 尺寸  | `MAX_LYRIC_WIDTH_BASE_DP`   | 360              | 歌词最大宽度                          |
+| UI  | `TEXT_PADDING_X`            | 20.0f            | 文本左右内边距                         |
+| UI  | `BUTTON_SPACING`            | 2.0f             | 控制按钮间距                          |
+| 消息号 | `WM_TRAY_CALLBACK`          | 0x0600           | 托盘回调                            |
+| 消息号 | `WM_RENDER_UPDATE`          | 0x0700           | 渲染更新请求                          |
+| 消息号 | `WM_PROCESS_EXITED`         | 0x0800           | 进程退出通知                          |
+| 安全  | `MAX_WS_MESSAGE_SIZE`       | 1MB              | WS 消息大小上限                       |
+| 系统  | `WINDOWS_TOOLTIP_MAX_LEN`   | 127              | Tooltip 最大长度                    |
+| 跑马灯 | `MARQUEE_DELAY_MS`          | 2000             | 滚动前延迟（ms）                       |
+| 跑马灯 | `MARQUEE_PAUSE_MS`          | 1000             | 滚动后暂停（ms）                       |
+| 跑马灯 | `MARQUEE_SPEED_PX_PER_SEC`  | 40               | 默认滚动速度（px/s）                    |
+| 跑马灯 | `MARQUEE_SPEEDUP_THRESHOLD` | 2.0f             | 超长歌词加速阈值（倍数）                    |
 
 ***
 
@@ -553,20 +553,20 @@ CreateWindowEx → WM_NCCREATE(return TRUE)
 
 #### 消息处理（WndProc）
 
-| 消息                           | 处理                              |
-| ---------------------------- | ------------------------------- |
-| `WM_TIMER`                   | 带异常恢复的渲染循环                      |
-| `WM_RENDER_UPDATE` (0x0700)  | 悬停状态变化立即重绘                      |
-| `WM_TRAY_CALLBACK` (0x0600)  | 托盘菜单命令分发                        |
-| `WM_PICK_FONT`               | ChooseFontW 字体选择（防重入）           |
-| `WM_DPICHANGED`              | 重新计算 DPI 并调整窗口                  |
-| `WM_SETTINGCHANGE`           | 任务栏可能变化，重新定位                    |
-| `WM_DISPLAYCHANGE`           | 分辨率变化，重新定位                      |
-| `WM_ACTIVATE`                | Z-order 全状态恢复（激活/失活均断言 TOPMOST） |
-| `WM_MOUSEMOVE`               | 悬停检测 + TrackMouseEvent          |
-| `WM_MOUSELEAVE`              | 悬停结束                            |
-| `WM_LBUTTONDOWN`             | 按钮点击或拖动开始                       |
-| `WM_LBUTTONUP`               | 拖动结束，保存位置偏移                     |
+| 消息                          | 处理                              |
+| --------------------------- | ------------------------------- |
+| `WM_TIMER`                  | 带异常恢复的渲染循环                      |
+| `WM_RENDER_UPDATE` (0x0700) | 悬停状态变化立即重绘                      |
+| `WM_TRAY_CALLBACK` (0x0600) | 托盘菜单命令分发                        |
+| `WM_PICK_FONT`              | ChooseFontW 字体选择（防重入）           |
+| `WM_DPICHANGED`             | 重新计算 DPI 并调整窗口                  |
+| `WM_SETTINGCHANGE`          | 任务栏可能变化，重新定位                    |
+| `WM_DISPLAYCHANGE`          | 分辨率变化，重新定位                      |
+| `WM_ACTIVATE`               | Z-order 全状态恢复（激活/失活均断言 TOPMOST） |
+| `WM_MOUSEMOVE`              | 悬停检测 + TrackMouseEvent          |
+| `WM_MOUSELEAVE`             | 悬停结束                            |
+| `WM_LBUTTONDOWN`            | 按钮点击或拖动开始                       |
+| `WM_LBUTTONUP`              | 拖动结束，保存位置偏移                     |
 
 #### Z-order 三重防护机制
 
@@ -734,12 +734,12 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 #### 端点列表
 
-| 方法 | 路径 | 鉴权 | 响应 | 说明 |
-|------|------|------|------|------|
-| `GET` | `/ping` | 需要 | `200 {"status":"ok","service":"MoeKoeTaskbarLyrics"}` | 存活检测 |
-| `POST` | `/` | 需要 | `200 {"status":"shutting_down"}` / `400 {"error":"..."}` | 关闭命令（body: `{"command":"shutdown"}` / `{"command":"toggle"}` / `{"command":"next"}` / `{"command":"prev"}`） |
-| `OPTIONS` | `*` | 跳过 | `204 No Content` | CORS 预检 |
-| 其他 | — | 需要 | `404 {"error":"not found"}` | |
+| 方法        | 路径      | 鉴权 | 响应                                                       | 说明                                                                                                          |
+| --------- | ------- | -- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET`     | `/ping` | 需要 | `200 {"status":"ok","service":"MoeKoeTaskbarLyrics"}`    | 存活检测                                                                                                        |
+| `POST`    | `/`     | 需要 | `200 {"status":"shutting_down"}` / `400 {"error":"..."}` | 关闭命令（body: `{"command":"shutdown"}` / `{"command":"toggle"}` / `{"command":"next"}` / `{"command":"prev"}`） |
+| `OPTIONS` | `*`     | 跳过 | `204 No Content`                                         | CORS 预检                                                                                                     |
+| 其他        | —       | 需要 | `404 {"error":"not found"}`                              | <br />                                                                                                      |
 
 > **注意：** popup.js 不再仅凭 `r.ok` 判断成功，而是解析 JSON 响应体校验确定性字段（如 `status === "shutting_down"`）。
 
@@ -773,10 +773,10 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 ### 4.5 MoeKoeMusic 端口清单
 
-| 端口   | 用途                           | 协议        | 可配置 |
-| ---- | ---------------------------- | --------- | ------ |
-| 6520 | WebSocket 服务（歌词 + 播放状态 + 控制） | WebSocket | 是（`websocket_port`） |
-| 6521 | KuGou Music API（HTTP REST）   | HTTP      | 否     |
+| 端口   | 用途                           | 协议        | 可配置                       |
+| ---- | ---------------------------- | --------- | ------------------------- |
+| 6520 | WebSocket 服务（歌词 + 播放状态 + 控制） | WebSocket | 是（`websocket_port`）       |
+| 6521 | KuGou Music API（HTTP REST）   | HTTP      | 否                         |
 | 6523 | 本插件 HTTP 服务（Extension 通信）    | HTTP      | **是**（`http_server_port`） |
 
 ***
@@ -832,14 +832,14 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 所有控制通过系统托盘右键菜单完成：
 
-| 操作           | 效果                               |
-| ------------ | -------------------------------- |
-| 勾选"锁定位置"       | 禁止拖动歌词窗口，但保留按钮（上一首/暂停/下一首）操作 |
-| 勾选"完全锁定"       | 禁止所有鼠标交互（含悬停和按钮），同时隐含锁定位置 |
-| 取消勾选"开机自动启动" | 删除注册表 Run key                    |
-| 点击"重新连接"     | 断开并重新连接 WebSocket                |
-| 点击"设置"       | 打开 WebView2 设置窗口（GUI 配置界面）       |
-| 点击"退出"       | 进程退出                             |
+| 操作           | 效果                           |
+| ------------ | ---------------------------- |
+| 勾选"锁定位置"     | 禁止拖动歌词窗口，但保留按钮（上一首/暂停/下一首）操作 |
+| 勾选"完全锁定"     | 禁止所有鼠标交互（含悬停和按钮），同时隐含锁定位置    |
+| 取消勾选"开机自动启动" | 删除注册表 Run key                |
+| 点击"重新连接"     | 断开并重新连接 WebSocket            |
+| 点击"设置"       | 打开 WebView2 设置窗口（GUI 配置界面）   |
+| 点击"退出"       | 进程退出                         |
 
 ### 5.4 卸载
 
@@ -874,10 +874,10 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 | WM\_TIMER 异常恢复         | 渲染器异常时自动重试，彻底失败则安全退出                           |
 | UTF 编码安全转换             | Utf8ToWide/WideToUtf8 统一处理                     |
 | 编译警告清理                 | 修复 C4100/C2374/C4189/C2660 等警告                 |
-| **本地 Token 鉴权**          | **HTTP 端点 X-MoeKoe-Token 头校验，OPTIONS 预检自动跳过**       |
-| **响应体确定性校验**          | **shutdown/ping 返回含确定性字段的 JSON，客户端校验 body**      |
-| **CORS 动态端口**            | **Allow-Origin 使用运行时实际端口，支持自定义端口**           |
-| **onMessage 兜底**           | **Chrome Extension 消息监听器所有分支显式 sendResponse**        |
+| **本地 Token 鉴权**        | **HTTP 端点 X-MoeKoe-Token 头校验，OPTIONS 预检自动跳过**  |
+| **响应体确定性校验**           | **shutdown/ping 返回含确定性字段的 JSON，客户端校验 body**    |
+| **CORS 动态端口**          | **Allow-Origin 使用运行时实际端口，支持自定义端口**             |
+| **onMessage 兜底**       | **Chrome Extension 消息监听器所有分支显式 sendResponse**  |
 
 ### 6.3 未来功能扩展
 
