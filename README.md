@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/release-v0.4.1-blue" alt="release" />
-  <img src="https://img.shields.io/badge/license-GPL--2.0-orange" alt="license" />
+  <img src="https://img.shields.io/badge/license-GPL--3.0-orange" alt="license" />
 
 </p>
 
@@ -122,4 +122,4 @@ cmake --build --preset x64-Release
 
 ## 许可证
 
-[GPL-2.0](LICENSE)
+[GPL-3.0](LICENSE)
