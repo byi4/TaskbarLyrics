@@ -1,7 +1,7 @@
 # MoeKoeMusic 任务栏歌词插件 — 开发文档
 
 > **版本：** v0.5（草案）\
-> **插件版本：** v0.4.0\
+> **插件版本：** v0.4.1\
 > **目标平台：** Windows 10/11（x64）\
 > **开发语言：** C++17\
 > **构建系统：** CMake + MSVC\
@@ -844,7 +844,7 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 ### 5.4 卸载
 
 1. 右键托盘图标 → 退出
-2. 删除 `MoeKoeTaskbarLyrics.exe` 文件
+2. 删除 `MoeKoeTaskbarLyrics.exe` 所在文件夹即可
 3. （可选）删除 `%APPDATA%\MoeKoeTaskbarLyrics\` 配置目录
 
 ***
@@ -881,18 +881,14 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 ### 6.3 未来功能扩展
 
-| 功能                                        | 难度 | 优先级 | 状态                     |
-| ----------------------------------------- | -- | --- | ---------------------- |
-| 绑定模式接入 main.cpp                           | 低  | ⭐⭐  | ⚠️ ProcessMonitor 待接入  |
-| 歌词滚动动画（平滑移动）                              | 中  | ⭐⭐⭐ | ✅ 已完成（跑马灯状态机）          |
-| 双行歌词显示（上一行+当前行）                           | 低  | ⭐⭐⭐ | ❌ 未实现                  |
-| 自定义字体和颜色（配置界面）                            | 低  | ⭐⭐  | ✅ 已完成                  |
-| Chrome Extension 开关 UI                    | 中  | ⭐⭐  | ✅ 已实现                  |
-| 歌词搜索（当 WebSocket 无数据时）                    | 高  | ⭐   | ❌ 未实现                  |
-| 支持其他播放器（Foobar2000 等）                     | 高  | ⭐   | ❌ 未实现                  |
-| API 模式自动开启                                | 中  | ⭐⭐  | ✅ 已完成（api\_enabler 模块） |
-| 硬编码颜色提取到 constants.h                      | 低  | ⭐   | 🔜 低优先级                |
-| 统一 logging 系统（合并 DebugLog/ConfigDebugLog） | 低  | ⭐   | 🔜 低优先级                |
+| 功能                                        | 难度 | 优先级 | 状态                       |
+| ----------------------------------------- | -- | --- | ------------------------ |
+| 绑定模式接入 main.cpp                           | 低  | ⭐⭐  | ⚠️ ProcessMonitor 待接入    |
+| Chrome Extension 开关 UI                    | 中  | ⭐⭐  | ✅ 已实现                    |
+| 歌词搜索（当 WebSocket 无数据时）                    | 高  | ⭐   | ❌ 未实现                    |
+| 支持其他播放器（Foobar2000 等）                     | 高  | ⭐   | ❌ 未实现(需要调整架构，后续考虑新开一个项目) |
+| 硬编码颜色提取到 constants.h                      | 低  | ⭐   | 🔜 低优先级                  |
+| 统一 logging 系统（合并 DebugLog/ConfigDebugLog） | 低  | ⭐   | 🔜 低优先级                  |
 
 ### 6.4 调试与日志
 

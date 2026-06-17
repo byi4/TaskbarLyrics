@@ -6,6 +6,7 @@
 #include "logger.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -468,10 +469,65 @@ void TaskbarRenderer::RenderCardStyle(const RenderState& state) {
     const float lyricsX = paddingX + coverSize + gap;
     const float lyricsWidth = static_cast<float>(width_) - lyricsX - paddingX;
 
-    if (lyricsWidth > 10.0f) {
-        std::wstring curW = Utf8ToWide(state.currentLine);
-        std::wstring nextW = Utf8ToWide(state.nextLine);
-        DrawCardLyrics(curW, nextW, lyricsX, 0.0f, lyricsWidth);
+    if (lyricsWidth <= 10.0f) return;
+
+    std::wstring curW = Utf8ToWide(state.currentLine);
+    std::wstring nextW = Utf8ToWide(state.nextLine);
+    const float h = static_cast<float>(height_);
+    const float halfH = h * 0.50f;
+
+    if (cardAnimState_ == CardAnimState::Animating && cardAnimProgress_ > 0.001f
+        && cardAnimProgress_ < 1.0f) {
+        // ═════ 动画中：双轨淡入淡出 + 位移 ═════
+        //
+        // 设计：新旧歌词分别绘制在两个"轨道"上：
+        //   旧轨道：向上位移 -halfH + 淡出 alpha 1→0
+        //   新轨道：从下方 halfH 处位移滑入 0 + 淡入 alpha 0→1
+        //
+        // 两条轨道有独立的位移/透明度曲线，中间有自然"过渡"，
+        // 不会出现生硬的卷轴切变感。
+
+        const float t = cardAnimProgress_;
+
+        // 旧轨道：位移 0→-halfH（向上滑出）；透明度 1→0
+        const float upOffset = -EaseInOutQuad(t) * halfH;
+        const float fadeOutAlpha = std::max(0.0f, 1.0f - EaseInOutQuad(t));
+
+        // 新轨道：位移 halfH→0（从下方滑入）；透明度 0→1
+        const float inOffset = (1.0f - EaseOutBack(t)) * halfH;
+        const float fadeInAlpha = EaseOutCubic(std::min(t / 0.85f, 1.0f));
+
+        std::wstring oldCurW = Utf8ToWide(cardPrevCurrentLine_);
+        std::wstring oldNextW = Utf8ToWide(cardPrevNextLine_);
+
+        // ── 裁剪到歌词区域，避免文本溢出 ──
+        D2D1_RECT_F clipRect = D2D1::RectF(lyricsX, 0.0f, lyricsX + lyricsWidth, h);
+        renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+        // ═════ 旧轨道（仅保留旧下一行：向上滑入当前行位置 + 淡出） ═════
+        // 旧当前行直接消失（无淡出动画），避免同位置出现两行文字的重影
+        if (!oldNextW.empty()) {
+            DrawCardLyricsSingle(oldNextW, lyricsX, halfH, lyricsWidth,
+                                 upOffset, fadeOutAlpha,
+                                 /*isCurrent=*/false);
+        }
+
+        // ═════ 新轨道（从下方滑入 + 淡入） ═════
+        if (!curW.empty()) {
+            DrawCardLyricsSingle(curW, lyricsX, 0.0f, lyricsWidth,
+                                 inOffset, fadeInAlpha,
+                                 /*isCurrent=*/true);
+        }
+        if (!nextW.empty()) {
+            DrawCardLyricsSingle(nextW, lyricsX, halfH, lyricsWidth,
+                                 inOffset, fadeInAlpha,
+                                 /*isCurrent=*/false);
+        }
+
+        renderTarget_->PopAxisAlignedClip();
+    } else {
+        // ═════ 非动画状态：正常双行绘制 ═════
+        DrawCardLyrics(curW, nextW, lyricsX, 0.0f, lyricsWidth, 0.0f, 1.0f);
     }
 }
 
@@ -577,29 +633,51 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
     }
 }
 
-void TaskbarRenderer::DrawCardLyrics(const std::wstring& currentLine,
-                                     const std::wstring& nextLine,
-                                     float x, float y, float availWidth) {
-    if (!renderTarget_) return;
+/// 绘制单行卡片模式歌词（动画时使用，可独立控制透明度、偏移）
+/// isCurrent = true  → 使用当前行字号/颜色（大字，亮色）
+/// isCurrent = false → 使用下一行字号/颜色（小字，灰色）
+void TaskbarRenderer::DrawCardLyricsSingle(const std::wstring& line,
+                                           float x, float y, float availWidth,
+                                           float yOffset, float alpha,
+                                           bool isCurrent) {
+    if (!renderTarget_ || line.empty() || alpha <= 0.001f) return;
 
     const float h = static_cast<float>(height_);
-    const float midY = h * 0.50f;   // 当前行占上半部分
+    const float midY = h * 0.50f;
 
-    // ═════ 当前行：使用 cardCurrentColor（独立颜色，无阴影） ═════
-    if (!currentLine.empty() && cardCurrentFormat_ && cardCurrentBrush_) {
-        D2D1_RECT_F curLayout = D2D1::RectF(x, y, x + availWidth, y + midY);
-        renderTarget_->DrawTextW(
-            currentLine.c_str(), static_cast<UINT32>(currentLine.size()),
-            cardCurrentFormat_.Get(), curLayout, cardCurrentBrush_.Get());
+    IDWriteTextFormat* format = isCurrent ? cardCurrentFormat_.Get() : cardNextFormat_.Get();
+    ID2D1SolidColorBrush* brush = isCurrent ? cardCurrentBrush_.Get() : cardNextBrush_.Get();
+    if (!format || !brush) return;
+
+    D2D1_COLOR_F origColor = brush->GetColor();
+    D2D1_COLOR_F animColor = origColor;
+    animColor.a = std::max(0.0f, std::min(1.0f, origColor.a * alpha));
+    brush->SetColor(animColor);
+
+    D2D1_RECT_F layout = D2D1::RectF(x, y + yOffset, x + availWidth, y + midY + yOffset);
+    renderTarget_->DrawTextW(
+        line.c_str(), static_cast<UINT32>(line.size()),
+        format, layout, brush);
+
+    brush->SetColor(origColor);
+}
+
+void TaskbarRenderer::DrawCardLyrics(const std::wstring& currentLine,
+                                     const std::wstring& nextLine,
+                                     float x, float y, float availWidth,
+                                     float yOffset, float alpha,
+                                     float /*curFontSizeScale*/, float /*nextFontSizeScale*/) {
+    if (!renderTarget_ || alpha <= 0.001f) return;
+
+    if (!currentLine.empty()) {
+        DrawCardLyricsSingle(currentLine, x, y, availWidth, yOffset, alpha,
+                             /*isCurrent=*/true);
     }
 
-    // ═════ 下一行：使用 cardNextColor（独立颜色，无阴影） ═════
-    if (!nextLine.empty() && cardNextFormat_ && cardNextBrush_) {
-        float nextY = y + midY;
-        D2D1_RECT_F nextLayout = D2D1::RectF(x, nextY, x + availWidth, y + h);
-        renderTarget_->DrawTextW(
-            nextLine.c_str(), static_cast<UINT32>(nextLine.size()),
-            cardNextFormat_.Get(), nextLayout, cardNextBrush_.Get());
+    const float halfH = static_cast<float>(height_) * 0.50f;
+    if (!nextLine.empty()) {
+        DrawCardLyricsSingle(nextLine, x, y + halfH, availWidth, yOffset, alpha,
+                             /*isCurrent=*/false);
     }
 }
 
@@ -680,6 +758,12 @@ void TaskbarRenderer::Render(const RenderState& state) {
         scrollOffset = UpdateMarquee(state.currentLine, static_cast<float>(state.progress), marqueeNeedsRedraw);
     }
 
+    // 卡片模式歌词切换动画更新
+    bool cardScrollNeedsRedraw = false;
+    if (settings_.displayMode == "card") {
+        cardScrollNeedsRedraw = UpdateCardAnim(state.currentLine, state.nextLine);
+    }
+
     bool stateChanged = (state.hasLyrics != lastState_.hasLyrics ||
                          state.currentLine != lastState_.currentLine ||
                          state.currentTranslated != lastState_.currentTranslated ||
@@ -693,7 +777,7 @@ void TaskbarRenderer::Render(const RenderState& state) {
     // 卡片模式无跑马灯：无封面图时每帧重绘（确保 fallback 始终可见），
     // 有封面图后按需重绘（state 变化时才更新）
     const bool needCardRedraw = (settings_.displayMode == "card" && !coverBitmap_);
-    if (!stateChanged && !marqueeNeedsRedraw && !needCardRedraw) {
+    if (!stateChanged && !marqueeNeedsRedraw && !needCardRedraw && !cardScrollNeedsRedraw) {
         return;
     }
     lastState_ = state;
@@ -945,6 +1029,78 @@ float TaskbarRenderer::UpdateMarquee(const std::string& lyricText, float progres
     }
 
     return 0.0f;
+}
+
+// ═════════════════════════════════════════
+// 卡片模式歌词切换动画（淡入淡出 + 位移）
+// ═════════════════════════════════════════
+
+float TaskbarRenderer::EaseOutCubic(float t) {
+    // ease-out cubic: f(t) = 1 - (1-t)^3
+    float c = std::clamp(t, 0.0f, 1.0f);
+    float inv = 1.0f - c;
+    return 1.0f - inv * inv * inv;
+}
+
+float TaskbarRenderer::EaseInOutQuad(float t) {
+    // ease-in-out quad: t<0.5 → 2*t^2, 否则 1-(2-2t)^2/2
+    float c = std::clamp(t, 0.0f, 1.0f);
+    if (c < 0.5f) {
+        return 2.0f * c * c;
+    }
+    float inv = 1.0f - c;
+    return 1.0f - 2.0f * inv * inv;
+}
+
+float TaskbarRenderer::EaseOutBack(float t) {
+    // ease-out back：末端轻微"冲出"然后回弹
+    // f(t) = 1 + c3*(t-1)^3 + c2*(t-1)^2, c1=1.70158, c2=c1+1, c3=c1+1
+    const float c1 = 1.70158f;
+    const float c3 = c1 + 1.0f;
+    float c = std::clamp(t, 0.0f, 1.0f);
+    float v = c - 1.0f;
+    return 1.0f + c3 * v * v * v + c1 * v * v;
+}
+
+bool TaskbarRenderer::UpdateCardAnim(const std::string& currentLine,
+                                     const std::string& nextLine) {
+    // 动画持续时间：500ms（流畅不拖沓）
+    constexpr double kDuration = 0.50;
+
+    bool lineChanged = (currentLine != cardLastCurrentLine_);
+    if (lineChanged && !currentLine.empty() && !cardLastCurrentLine_.empty()) {
+        cardPrevCurrentLine_ = cardLastCurrentLine_;
+        cardPrevNextLine_ = cardLastNextLine_;
+        cardAnimState_ = CardAnimState::Animating;
+        cardAnimProgress_ = 0.0f;
+
+        LARGE_INTEGER li, freq;
+        ::QueryPerformanceCounter(&li);
+        ::QueryPerformanceFrequency(&freq);
+        cardAnimStartTime_ = static_cast<double>(li.QuadPart) / static_cast<double>(freq.QuadPart);
+    }
+
+    cardLastCurrentLine_ = currentLine;
+    cardLastNextLine_ = nextLine;
+
+    if (cardAnimState_ == CardAnimState::Idle) {
+        return false;
+    }
+
+    LARGE_INTEGER li, freq;
+    ::QueryPerformanceCounter(&li);
+    ::QueryPerformanceFrequency(&freq);
+    double now = static_cast<double>(li.QuadPart) / static_cast<double>(freq.QuadPart);
+    double elapsed = now - cardAnimStartTime_;
+    cardAnimProgress_ = static_cast<float>(std::min(elapsed / kDuration, 1.0));
+
+    if (cardAnimProgress_ >= 1.0f) {
+        cardAnimState_ = CardAnimState::Idle;
+        cardAnimProgress_ = 0.0f;
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace moekoe

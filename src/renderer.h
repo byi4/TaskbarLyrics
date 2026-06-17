@@ -77,9 +77,15 @@ private:
     void RenderCardStyle(const RenderState& state);
     void DrawCoverArt(const std::string& url, const std::string& fallbackChar,
                       float x, float y, float size);
+    /// 绘制单行卡片模式歌词（isCurrent=true → 当前行大号亮色，false → 下一行小号灰色）
+    void DrawCardLyricsSingle(const std::wstring& line,
+                              float x, float y, float availWidth,
+                              float yOffset, float alpha, bool isCurrent);
     void DrawCardLyrics(const std::wstring& currentLine,
                         const std::wstring& nextLine,
-                        float x, float y, float availWidth);
+                        float x, float y, float availWidth,
+                        float yOffset = 0.0f, float alpha = 1.0f,
+                        float curFontSizeScale = 1.0f, float nextFontSizeScale = 1.0f);
 
     static D2D1_COLOR_F ParseColor(const std::string& hex, float alpha = 1.0f);
 
@@ -164,6 +170,44 @@ private:
     // 卡片模式专用颜色画刷
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardCurrentBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardNextBrush_;
+
+    // ═══════════════════════════════
+    // 卡片模式歌词切换动画（淡入淡出 + 位移）
+    // ═══════════════════════════════
+
+    /// 歌词切换动画状态
+    enum class CardAnimState {
+        Idle,       // 无动画，正常显示
+        Animating,  // 动画进行中
+    };
+
+    CardAnimState    cardAnimState_{CardAnimState::Idle};
+    double          cardAnimStartTime_{0.0};     // 动画开始时间（QPC 秒）
+    float           cardAnimProgress_{0.0f};    // 当前动画进度 [0, 1]
+
+    /// 动画期间缓存的旧歌词（用于绘制淡出的旧内容）
+    std::string     cardPrevCurrentLine_;        // 旧的当前行
+    std::string     cardPrevNextLine_;           // 旧的下一行
+
+    std::string     cardLastCurrentLine_;         // 上一次的当前行（用于检测切换）
+    std::string     cardLastNextLine_;         // 上一次的下一行
+
+    /// 更新卡片模式歌词切换动画
+    /// 返回是否处于动画中（需要持续重绘）
+    bool UpdateCardAnim(const std::string& currentLine, const std::string& nextLine);
+
+    // ═══════════════════════════════
+    // 缓动函数库
+    // ═══════════════════════════════
+
+    /// ease-out cubic: f(t) = 1 - (1-t)^3
+    static float EaseOutCubic(float t);
+
+    /// ease-in-out quad: f(t) = t<0.5 ? 2t^2 : 1-(2-2t)^2/2
+    static float EaseInOutQuad(float t);
+
+    /// ease-out back（带有轻微回弹，用于入场）
+    static float EaseOutBack(float t);
 };
 
 } // namespace moekoe
