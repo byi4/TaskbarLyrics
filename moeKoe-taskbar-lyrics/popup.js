@@ -1,15 +1,15 @@
 // MoeKoe Taskbar Lyrics - Popup Script
 //
-// v0.4.0 迁移到 Native Host 托管模式:
-//   - EXE 生命周期由 MoeKoeMusic 的 nativeHostManager 管理
-//   - 不再需要手动启动/停止（auto_start: true）
-//   - 进程状态通过 nativeHost API 查询
-//   - 保留 HTTP 端口 (6523) 作为独立运行模式下的备用接口
+// v0.4.1 安全加固:
+//   - 端口可配置化（从 storage 读取，默认值兜底）
+//   - 连接状态指示器增强（重连次数、最后连接时间、重连中止提示）
+//   - HTTP 回退接口保留鉴权头
 
 // ── 运行时常量 ──────────────────────────────────────────────────────────────────
-const WS_PORT       = 6520;
-const HTTP_PORT     = 6523;
-const AUTH_HEADER   = 'X-MoeKoe-Token';
+const DEFAULT_WS_PORT = 6520;
+const DEFAULT_HTTP_PORT = 6523;
+const AUTH_HEADER = 'X-MoeKoe-Token';
+let httpPort = DEFAULT_HTTP_PORT;
 
 document.addEventListener('DOMContentLoaded', () => {
     const statusDot = document.getElementById('statusDot');
@@ -25,11 +25,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ---- 工具函数 ----
 
-    function updateConnectionUI(connected) {
+    // 加载端口配置（从 storage 读取，默认值兜底）
+    async function loadPortConfig() {
+        try {
+            const cfg = await chrome.storage.local.get(['wsPort', 'httpPort']);
+            httpPort = cfg.httpPort || DEFAULT_HTTP_PORT;
+        } catch (e) {
+            httpPort = DEFAULT_HTTP_PORT;
+        }
+    }
+
+    function formatTime(ts) {
+        if (!ts) return '--';
+        const d = new Date(ts);
+        return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function updateConnectionUI(connected, extra = {}) {
         statusDot.className = 'status-dot ' + (connected ? 'on' : 'off');
-        statusText.textContent = connected ? '已连接' : '等待连接';
-        wsStatus.textContent = connected ? '已连接' : '未连接';
-        wsStatus.style.color = connected ? '#52c41a' : '#ff4d4f';
+        wsStatus.textContent = connected ? '已连接' : (extra.reconnectAborted ? '重连中止' : (extra.reconnecting ? '重连中...' : '未连接'));
+        wsStatus.style.color = connected ? '#52c41a' : (extra.reconnectAborted ? '#faad14' : '#ff4d4f');
+        statusText.textContent = connected ? '已连接' : (extra.reconnectAborted ? '已达上限，请手动重连' : '等待连接');
+
+        // 增强状态信息：显示重连次数和最后连接时间
+        if (extra.reconnectAttempts != null && !connected) {
+            const infoEl = document.getElementById('reconnectInfo');
+            if (!infoEl) {
+                const el = document.createElement('span');
+                el.id = 'reconnectInfo';
+                el.style.cssText = 'font-size:11px;color:#999;display:block;margin-top:2px;';
+                statusText.parentNode.insertBefore(el, statusText.nextSibling);
+            }
+            document.getElementById('reconnectInfo').textContent =
+                `重连 ${extra.reconnectAttempts}/50 次` +
+                (extra.lastConnectTime ? ` | 上次连接 ${formatTime(extra.lastConnectTime)}` : '');
+        }
     }
 
     // 更新托管进程状态显示（只读，不可手动控制）
@@ -99,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const controller = new AbortController();
             setTimeout(() => controller.abort(), 2000);
-            const r = await fetch(`http://127.0.0.1:${HTTP_PORT}/ping`, {
+            const r = await fetch(`http://127.0.0.1:${httpPort}/ping`, {
                 method: 'GET',
                 headers: await buildAuthHeaders(),
                 signal: controller.signal
@@ -143,8 +173,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ---- 初始化 ----
 
-    chrome.runtime.sendMessage({ type: 'getStatus' }, (response) => {
-        if (response) updateConnectionUI(response.connected);
+    loadPortConfig().then(() => {
+        chrome.runtime.sendMessage({ type: 'getStatus' }, (response) => {
+            if (response) updateConnectionUI(response.connected, response);
+        });
     });
 
     detectProcessStatus();
@@ -152,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.onMessage.addListener((message) => {
         switch (message.type) {
             case 'connectionStatus':
-                updateConnectionUI(message.connected);
+                updateConnectionUI(message.connected, message);
                 break;
             case 'lyrics': {
                 const currentLyric = document.getElementById('currentLyric');

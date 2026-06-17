@@ -401,6 +401,10 @@ void TaskbarWindow::SnapToEmptySpace() {
     // 采样步长：每 N 像素采一个点（兼顾精度和性能）
     constexpr int kSampleStep = 8;
 
+    // 在移动窗口前预先计算中心坐标（基于原位置，用于采样点定位）
+    const int centerX = (winRect.left + winRect.right) / 2;
+    const int centerY = (winRect.top + winRect.bottom) / 2;
+
     // 临时将窗口移到屏幕外（避免遮挡采样）
     ::SetWindowPos(hwnd_, nullptr,
                    -winW * 2, -winH * 2, winW, winH,
@@ -419,11 +423,11 @@ void TaskbarWindow::SnapToEmptySpace() {
         case TaskbarPosition::BOTTOM:
         case TaskbarPosition::TOP:
             pt.x = pos;
-            pt.y = (winRect.top + winRect.bottom) / 2;  // 窗口中心 Y
+            pt.y = centerY;
             break;
         case TaskbarPosition::LEFT:
         case TaskbarPosition::RIGHT:
-            pt.x = (winRect.left + winRect.right) / 2;  // 窗口中心 X
+            pt.x = centerX;
             pt.y = pos;
             break;
         default:

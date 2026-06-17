@@ -13,6 +13,12 @@
 
 const HOST_ID = 'taskbar-lyrics-host';
 
+// ── 防御性检查：确保 electronAPI 已正确加载 ──
+if (!window.electronAPI || !window.electronAPI.nativeHost) {
+    console.error('[NativeBridge] 致命错误: electronAPI 未定义或 preload 脚本未正确加载。桥接页无法工作。');
+    // 不再继续初始化，避免后续 ReferenceError 导致页面完全崩溃
+} else {
+
 // ── 建立 background 的长连接 Port ──
 const port = chrome.runtime.connect({ name: 'moekoe-native-host-bridge' });
 
@@ -42,6 +48,7 @@ port.onMessage.addListener(async (message) => {
             port.postMessage({
                 type: 'native-host:response',
                 requestId: message.requestId,
+                seq: message.seq,        // 回传序列号（防重放校验）
                 result: result
             });
             break;
@@ -52,6 +59,7 @@ port.onMessage.addListener(async (message) => {
             port.postMessage({
                 type: 'native-host:response',
                 requestId: message.requestId,
+                seq: message.seq,        // 回传序列号（防重放校验）
                 result: result
             });
             break;
@@ -63,3 +71,5 @@ port.onMessage.addListener(async (message) => {
 port.onDisconnect.addListener(() => {
     console.warn('[NativeBridge] Background port disconnected');
 });
+
+} // end of electronAPI guard

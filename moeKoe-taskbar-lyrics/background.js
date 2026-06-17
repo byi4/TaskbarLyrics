@@ -5,15 +5,20 @@
 //   - 将歌词和播放状态转发给 popup
 //   - 通过 Native Host Bridge 与 MoeKoeMusic 主进程通信，管理 C++ EXE 生命周期
 
-const WS_PORT = 6520;
+const DEFAULT_WS_PORT = 6520;
+const DEFAULT_HTTP_PORT = 6523;
 const RECONNECT_INTERVAL = 3000;
 const MAX_RECONNECT_DELAY = 30000; // 最大重连间隔 30 秒
-const CONNECT_TIMEOUT = 5000; // 5 秒连接超时
+const MAX_RECONNECT_ATTEMPTS = 50;  // 最大重连次数上限，超过后停止自动重连
+const CONNECT_TIMEOUT = 5000;       // 5 秒连接超时
 const HOST_ID = 'taskbar-lyrics-host';
 
 let ws = null;
 let connected = false;
 let reconnectAttempts = 0;
+let reconnectAborted = false;      // 是否已因达到上限而停止重连
+let lastConnectTime = null;        // 最后成功连接时间（用于 UI 指示）
+let wsPort = DEFAULT_WS_PORT;
 
 // ---- Token 管理 ----
 // 在 Service Worker 启动时生成并缓存令牌，避免每次同步读取 storage
@@ -24,20 +29,40 @@ async function getAuthToken() {
     if (cachedAuthToken) return cachedAuthToken;
     const result = await chrome.storage.local.get('authToken');
     if (result.authToken) {
+        // 一致性校验：确保缓存的令牌与 storage 中的一致（防止 SW 重启后不同步）
+        if (cachedAuthToken && cachedAuthToken !== result.authToken) {
+            console.warn('[TaskbarLyrics] 缓存令牌与 storage 不一致，以 storage 为准');
+        }
         cachedAuthToken = result.authToken;
         return cachedAuthToken;
     }
-    // 不存在则生成新令牌
-    const token = 'MoeKoeTL-' + crypto.randomUUID();
+    // 不存在则生成新令牌：前缀 + 时间戳 + 随机 UUID + 额外随机字节
+    const ts = Date.now().toString(36);
+    const rnd = crypto.randomUUID();
+    const extra = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+                        .map(b => b.toString(16).padStart(2, '0')).join('');
+    const token = `MoeKoeTL-${ts}-${rnd}-${extra}`;
     await chrome.storage.local.set({ authToken: token });
     cachedAuthToken = token;
     return token;
+}
+
+// ---- 端口配置 ----
+
+async function loadPortConfig() {
+    try {
+        const cfg = await chrome.storage.local.get(['wsPort', 'httpPort']);
+        wsPort = cfg.wsPort || DEFAULT_WS_PORT;
+    } catch (e) {
+        wsPort = DEFAULT_WS_PORT;
+    }
 }
 
 // ---- Native Host Bridge 管理 ----
 
 let bridgePort = null;
 const pending = new Map();
+let messageSeq = 0;  // Bridge 消息序列号（防重放）
 
 // 监听 bridge 页面连接（native-bridge.html 由 Main Process 隐藏打开）
 chrome.runtime.onConnect.addListener((port) => {
@@ -53,10 +78,26 @@ chrome.runtime.onConnect.addListener((port) => {
 
         // bridge 转发的响应消息
         if (message.type === 'native-host:response') {
-            const resolve = pending.get(message.requestId);
-            if (resolve) {
-                pending.delete(message.requestId);
-                resolve(message.result);
+            // 序列号校验：丢弃过期或重复的响应（防重放）
+            if (message.seq != null && message.requestId) {
+                const resolve = pending.get(message.requestId);
+                if (resolve) {
+                    const stored = pending.get('__seq__' + message.requestId);
+                    if (stored != null && message.seq < stored) {
+                        console.warn('[TaskbarLyrics] 丢弃过期的 bridge 响应 (seq:', message.seq, '< 已记录:', stored, ')');
+                        return;
+                    }
+                    pending.delete(message.requestId);
+                    pending.delete('__seq__' + message.requestId);
+                    resolve(message.result);
+                }
+            } else {
+                // 无序列号的旧格式兼容处理
+                const resolve = pending.get(message.requestId);
+                if (resolve) {
+                    pending.delete(message.requestId);
+                    resolve(message.result);
+                }
             }
             return;
         }
@@ -77,7 +118,7 @@ chrome.runtime.onConnect.addListener((port) => {
     });
 });
 
-// 通过 bridge 发送请求到 EXE（Promise 封装）
+// 通过 bridge 发送请求到 EXE（Promise 封装，带序列号防重放）
 function sendBridgeRequest(type, payload) {
     return new Promise((resolve, reject) => {
         if (!bridgePort) {
@@ -86,13 +127,16 @@ function sendBridgeRequest(type, payload) {
         }
 
         const id = crypto.randomUUID();
-        bridgePort.postMessage({ type, payload, requestId: id });
+        messageSeq++;
+        bridgePort.postMessage({ type, payload, requestId: id, seq: messageSeq });
         pending.set(id, resolve);
+        pending.set('__seq__' + id, messageSeq);  // 记录发送时的序列号
 
         // 10 秒超时
         setTimeout(() => {
             if (pending.has(id)) {
                 pending.delete(id);
+                pending.delete('__seq__' + id);
                 reject(new Error('Native Host 请求超时'));
             }
         }, 10000);
@@ -119,20 +163,45 @@ async function sendToHost(payload) {
 
 // ---- WebSocket 连接管理 ----
 
-// 指数退避重连策略
+// 指数退避重连策略（带最大重连次数限制）
 function scheduleReconnect() {
+    // 达到最大重连次数上限后停止自动重连，通知用户手动干预
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        reconnectAborted = true;
+        console.error(`[TaskbarLyrics] 重连已达上限 (${MAX_RECONNECT_ATTEMPTS} 次)，已停止自动重连，请检查服务端状态或手动点击重连`);
+        broadcastToPopup({
+            type: 'connectionStatus',
+            connected: false,
+            reconnectAborted: true,
+            reconnectAttempts: reconnectAttempts
+        });
+        return;
+    }
+
     // 首次连接失败使用 1 秒，之后以指数退避递增，上限 MAX_RECONNECT_DELAY
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
     reconnectAttempts++;
-    console.log(`[TaskbarLyrics] ${delay / 1000} 秒后尝试重连 (第 ${reconnectAttempts} 次)`);
+    console.log(`[TaskbarLyrics] ${delay / 1000} 秒后尝试重连 (第 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} 次)`);
+    broadcastToPopup({
+        type: 'connectionStatus',
+        connected: false,
+        reconnecting: true,
+        reconnectAttempts: reconnectAttempts
+    });
     setTimeout(connectWebSocket, delay);
+}
+
+// 手动重置重连计数器（供 popup 的"重新连接"按钮调用）
+function resetReconnectState() {
+    reconnectAttempts = 0;
+    reconnectAborted = false;
 }
 
 function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
     try {
-        ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+        ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
         let connectionTimeout = null;
         let hasConnected = false;
         let cleared = false;
@@ -156,10 +225,17 @@ function connectWebSocket() {
         ws.onopen = () => {
             hasConnected = true;
             reconnectAttempts = 0; // 连接成功，重置重连计数
+            reconnectAborted = false;
+            lastConnectTime = Date.now();
             clearConnectionTimeout();
             connected = true;
             console.log('[TaskbarLyrics] WebSocket 已连接');
-            broadcastToPopup({ type: 'connectionStatus', connected: true });
+            broadcastToPopup({
+                type: 'connectionStatus',
+                connected: true,
+                lastConnectTime: lastConnectTime,
+                port: wsPort
+            });
 
             // 发送身份验证令牌（服务端可选支持校验）
             getAuthToken().then(token => {
@@ -184,7 +260,13 @@ function connectWebSocket() {
             clearConnectionTimeout();
             connected = false;
             console.log('[TaskbarLyrics] WebSocket 已断开');
-            broadcastToPopup({ type: 'connectionStatus', connected: false });
+            broadcastToPopup({
+                type: 'connectionStatus',
+                connected: false,
+                reconnecting: !reconnectAborted,
+                reconnectAttempts: reconnectAttempts,
+                reconnectAborted: reconnectAborted
+            });
             scheduleReconnect();
         };
 
@@ -243,7 +325,13 @@ function broadcastToPopup(data) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message && message.type) {
         case 'getStatus':
-            sendResponse({ connected });
+            sendResponse({
+                connected,
+                reconnectAttempts,
+                reconnectAborted,
+                lastConnectTime,
+                port: wsPort
+            });
             return true;
 
         case 'getAuthToken':
@@ -256,6 +344,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case 'reconnect':
+            resetReconnectState();
             if (ws) { try { ws.close(); } catch (_) {} }
             connectWebSocket();
             sendResponse({ success: true });
@@ -279,5 +368,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ---- 启动 ----
 
-connectWebSocket();
-console.log('[TaskbarLyrics] 插件已加载 (v0.4.0 Native Host 模式)');
+loadPortConfig().then(() => {
+    connectWebSocket();
+    console.log(`[TaskbarLyrics] 插件已加载 (v0.4.1 Native Host 模式, WS端口: ${wsPort})`);
+});
