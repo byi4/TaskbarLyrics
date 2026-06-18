@@ -824,12 +824,12 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         return 0;
     }
     case WM_SETTINGCHANGE: {
-        // SPI_SETWORKAREA: 分辨率/缩放/多显示器变更
+        // SPI_SETWORKAREA: 分辨率/缩放/多显示器/自动隐藏任务栏滑出时发送
         // SPI_SETNONCLIENTMETRICS: 系统字体/边框大小变更
-        // 其他 SPI_* 不影响布局，不重置偏移
+        // 注意：自动隐藏模式下按 Win 键也会触发 SPI_SETWORKAREA，
+        // 不应因此重置拖动偏移。仅当任务栏位置/方向真正变化时才重置，
+        // 该逻辑已在 PositionLyricsInTaskbar 的 DetectTaskbarInfo 中处理。
         if (wParam == SPI_SETWORKAREA || wParam == SPI_SETNONCLIENTMETRICS) {
-            self->dragOffsetX_ = 0;
-            self->dragOffsetY_ = 0;
             self->PositionLyricsInTaskbar();
         }
         return 0;
