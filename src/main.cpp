@@ -46,6 +46,10 @@ struct AppContext {
     HINSTANCE                hInstance{nullptr};
     HWND                     hwnd{nullptr}; // 隐式消息窗口
     bool                     running{true};
+
+    // 全屏检测防抖状态
+    int  fullscreenDebounceCnt{0};     // 连续检测到全屏/非全屏的帧数
+    bool lastFullscreenState{false};   // 上一帧的全屏状态
 };
 
 using namespace moekoe::constants;
@@ -61,6 +65,75 @@ std::wstring ToTooltipWide(const std::string& s) {
     ::MultiByteToWideChar(CP_UTF8, 0, s.data(),
                           static_cast<int>(s.size()), &out[0], len);
     return out;
+}
+
+// 检测前台窗口是否处于全屏状态
+// 判断标准：窗口矩形覆盖所在显示器（>= 显示器尺寸），且无标题栏
+bool IsForegroundFullscreen() {
+    HWND fgw = ::GetForegroundWindow();
+    if (!fgw) return false;
+
+    // 排除桌面类窗口（Progman / WorkerW）
+    wchar_t cls[64] = {};
+    ::GetClassNameW(fgw, cls, 63);
+    if (wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0 ||
+        wcscmp(cls, L"Shell_TrayWnd") == 0) {
+        return false;
+    }
+
+    // 排除本进程自己的窗口
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(fgw, &pid);
+    if (pid == ::GetCurrentProcessId()) return false;
+
+    // 获取窗口矩形
+    RECT wr{};
+    if (!::GetWindowRect(fgw, &wr)) return false;
+
+    // 获取所在显示器矩形
+    HMONITOR mon = ::MonitorFromWindow(fgw, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!::GetMonitorInfoW(mon, &mi)) return false;
+
+    const int monW = mi.rcMonitor.right - mi.rcMonitor.left;
+    const int monH = mi.rcMonitor.bottom - mi.rcMonitor.top;
+    const int winW = wr.right - wr.left;
+    const int winH = wr.bottom - wr.top;
+
+    // 【调试】每秒输出一次检测详情，定位检测失效原因
+    static int s_debugCounter = 0;
+    if (++s_debugCounter >= 60) {
+        s_debugCounter = 0;
+        LONG style = ::GetWindowLongW(fgw, GWL_STYLE);
+        LONG exStyle = ::GetWindowLongW(fgw, GWL_EXSTYLE);
+        // 将 wchar_t 类名转为 UTF-8，适配项目 Log() 系统
+        char clsUtf8[128] = {};
+        ::WideCharToMultiByte(CP_UTF8, 0, cls, -1,
+                              clsUtf8, (int)sizeof(clsUtf8), nullptr, nullptr);
+        Log("[FullscreenDetect] cls=%s pid=%lu "
+            "win=(%d,%d,%d,%d) mon=(%d,%d,%d,%d) "
+            "style=0x%08lX exStyle=0x%08lX => %s\n",
+            clsUtf8, pid,
+            wr.left, wr.top, wr.right, wr.bottom,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right, mi.rcMonitor.bottom,
+            style, exStyle,
+            (winW >= monW && winH >= monH) ? "FULLSCREEN" : "normal");
+    }
+
+    // 窗口覆盖整个显示器 → 判定全屏
+    if (winW >= monW && winH >= monH) return true;
+
+    // 补充：无标题栏（WS_CAPTION）的窗口，即使尺寸略小于显示器也视为全屏
+    // （部分全屏应用使用 borderless 窗口，rect 可能稍小于显示器）
+    LONG style = ::GetWindowLongW(fgw, GWL_STYLE);
+    constexpr LONG kFullscreenExcludeStyles = WS_CAPTION | WS_THICKFRAME;
+    if (!(style & kFullscreenExcludeStyles) && winW >= monW - 8 && winH >= monH - 8) {
+        return true;
+    }
+
+    return false;
 }
 
 // 应用渲染器配置
@@ -514,6 +587,47 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // 2. APPBAR 自动隐藏：窗口已隐藏时跳过渲染（避免 UpdateLayeredWindow 隐式显示导致闪烁）
             if (app->taskbarWindow && app->taskbarWindow->IsAutoHideHidden()) return 0;
 
+            // 2.5. 全屏检测防抖：连续 N 帧为同一状态后才切换显隐
+            if (app->taskbarWindow && app->config && app->config->Advanced().enableFullscreenHide) {
+                static bool s_blockEntered = false;
+                if (!s_blockEntered) {
+                    s_blockEntered = true;
+                    Log("[FullscreenDetect] block entered, enableFullscreenHide=true\n");
+                }
+                const bool isFullscreen = IsForegroundFullscreen();
+                if (isFullscreen == app->lastFullscreenState) {
+                    if (app->fullscreenDebounceCnt < 99) app->fullscreenDebounceCnt++;
+                } else {
+                    // 状态翻转：输出日志定位频繁切换原因
+                    Log("[FullscreenDetect] state flip: %d -> %d (debounce reset)\n",
+                        (int)app->lastFullscreenState, (int)isFullscreen);
+                    app->fullscreenDebounceCnt = 0;
+                    app->lastFullscreenState = isFullscreen;
+                }
+
+                // 防抖阈值：~120ms（8 帧 × 15ms MIN_FRAME_INTERVAL）
+                constexpr int kDebounceThreshold = 8;
+                if (app->fullscreenDebounceCnt == kDebounceThreshold) {
+                    Log("[FullscreenDetect] debounce reached -> SetFullscreenHidden(%d)\n",
+                        (int)isFullscreen);
+                    app->taskbarWindow->SetFullscreenHidden(isFullscreen);
+                }
+
+                // Shell 交互（如 Win 键呼出开始菜单）在 ShellMenuWinEventProc 中
+                // 直接调用 SetFullscreenHidden(false) 并设置 s_forceDebounceReset_ 标志。
+                // 此处消费该标志，将防抖计数器清零且将基线设为"非全屏"，避免下一帧
+                // 全屏检测读到 isFullscreen==true 后立即触发状态翻转重新计数隐藏。
+                if (moekoe::TaskbarWindow::s_forceDebounceReset_) {
+                    moekoe::TaskbarWindow::s_forceDebounceReset_ = false;
+                    app->fullscreenDebounceCnt = 0;
+                    app->lastFullscreenState = false;
+                    Log("[FullscreenDetect] debounce reset by external trigger (shell interaction)\n");
+                }
+            }
+
+            // 2.6. 全屏隐藏时跳过渲染（与 APPBAR 同理）
+            if (app->taskbarWindow && app->taskbarWindow->IsFullscreenHidden()) return 0;
+
             // 3. 从歌词解析器获取当前应渲染的状态
             if (app->parser && app->renderer) {
                 auto state = app->parser->GetCurrentRenderState();
@@ -563,6 +677,9 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         try {
             // APPBAR 自动隐藏时跳过悬停重绘
             if (app->taskbarWindow && app->taskbarWindow->IsAutoHideHidden()) return 0;
+
+            // 全屏隐藏时跳过悬停重绘
+            if (app->taskbarWindow && app->taskbarWindow->IsFullscreenHidden()) return 0;
 
             if (app->parser && app->renderer && app->taskbarWindow) {
                 auto state = app->parser->GetCurrentRenderState();
@@ -725,6 +842,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     // 同步任务栏方向到渲染器（纵向屏幕/垂直任务栏适配）
     renderer.SetVerticalTaskbar(taskbarWindow.IsVerticalTaskbar());
+    renderer.SetDebugLog(config.Advanced().debugLog);
 
     // 10) 启动 WebSocket 客户端 + 歌词解析
     moekoe::LyricsParser parser;
@@ -732,9 +850,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
 
     moekoe::WebSocketClient wsClient;
     app.wsClient = &wsClient;
+    wsClient.SetDebugLog(config.Advanced().debugLog);
 
     wsClient.OnLyrics([&](const moekoe::LyricsData& data) {
-        Log("[WS] OnLyrics: valid=%d lines=%zu\n", data.valid, data.lines.size());
+        if (app.config->Advanced().debugLog) Log("[WS] OnLyrics: valid=%d lines=%zu\n", data.valid, data.lines.size());
         parser.UpdateLyrics(data);
         if (app.taskbarWindow && data.valid) {
             HWND h = taskbarWindow.GetHandle();
@@ -744,7 +863,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         }
     });
     wsClient.OnPlayerState([&](const moekoe::PlayerState& st) {
-        Log("[WS] OnPlayerState: playing=%d time=%.2f song='%s' cover='%s'\n",
+        if (app.config->Advanced().debugLog) Log("[WS] OnPlayerState: playing=%d time=%.2f song='%s' cover='%s'\n",
             st.isPlaying, st.currentTime, st.songTitle.c_str(),
             st.coverArtUrl.empty() ? "(empty)" : st.coverArtUrl.substr(0, 60).c_str());
         parser.UpdatePlayerState(st);

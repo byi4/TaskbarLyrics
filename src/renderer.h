@@ -62,6 +62,9 @@ public:
     void Render(const RenderState& state);
     void Resize(UINT width, UINT height, UINT dpi);
 
+    // 调试日志开关（由 config.debugLog 控制）
+    void SetDebugLog(bool enabled) { debugLog_ = enabled; }
+
     // 设置/查询垂直任务栏模式（LEFT / RIGHT 方位时启用）
     void SetVerticalTaskbar(bool vertical) { isVerticalTaskbar_ = vertical; }
     bool IsVerticalTaskbar() const { return isVerticalTaskbar_; }
@@ -131,6 +134,7 @@ private:
     UINT dpi_{96};
     bool initialized_{false};
     bool isVerticalTaskbar_{false};  // 垂直任务栏模式（LEFT/RIGHT）
+    bool debugLog_{false};           // 调试日志开关（由 config.debugLog 控制）
 
     Microsoft::WRL::ComPtr<ID2D1Factory>              d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1RenderTarget>        renderTarget_;

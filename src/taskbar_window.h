@@ -82,6 +82,10 @@ public:
     // APPBAR 自动隐藏状态查询（供主循环判断是否应跳过渲染）
     bool IsAutoHideHidden() const { return taskbarAutoHide_ && !taskbarVisible_; }
 
+    // 全屏检测隐藏状态查询（供主循环判断是否应跳过渲染）
+    bool IsFullscreenHidden() const { return fullscreenHidden_; }
+    void SetFullscreenHidden(bool hidden);
+
     // 拖动偏移（用户手动拖动调整的位置）
     int GetDragOffsetX() const { return dragOffsetX_; }
     int GetDragOffsetY() const { return dragOffsetY_; }
@@ -123,6 +127,8 @@ public:
     static RECT s_lastGoodTaskbarRect_;      // 非冻结期间已知稳定 rect（供冻结快照使用，避免 Explorer 脏写污染）
     static HWINEVENTHOOK s_foregroundHook_;      // Win11 Start Menu 前台检测
     static bool          s_lockedByStartMenuFg_; // 前台 Hook 设置的锁（与 MENUPOPUPSTART 区分来源）
+    static TaskbarWindow* s_instance_;            // 指向唯一实例，供静态回调访问实例状态
+    static bool          s_forceDebounceReset_;   // 告知 main.cpp 重置全屏防抖计数器
 
     friend void CALLBACK ShellMenuWinEventProc(HWINEVENTHOOK, DWORD event, HWND,
                                                LONG, LONG, DWORD, DWORD);
@@ -168,6 +174,7 @@ private:
     bool          fullyLocked_{false};     // 完全锁定：禁止拖动+按钮交互
     bool          taskbarAutoHide_{false}; // 任务栏自动隐藏状态
     bool          taskbarVisible_{false};   // 任务栏当前是否可见
+    bool          fullscreenHidden_{false};  // 全屏检测导致的窗口隐藏状态
     RECT          stableTaskbarRect_{};     // 稳定帧矩形（动画期间不更新）
     RECT          stableTaskListRect_{};    // 任务列表子窗口稳定矩形（动画期间不更新）
     bool          stableTaskListValid_{false};

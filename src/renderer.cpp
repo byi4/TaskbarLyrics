@@ -695,7 +695,7 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
             }
 
             coverLoadInProgress_.store(false, std::memory_order_release);
-            Log("[COVER] Download %s: %s, url='%s'\n",
+            if (debugLog_) Log("[COVER] Download %s: %s, url='%s'\n",
                 SUCCEEDED(hr) ? "OK" : "FAIL",
                 SUCCEEDED(hr) ? pendingCoverFile_.c_str() : "error",
                 targetUrl.substr(0, 60).c_str());
@@ -776,7 +776,7 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
                                         stride,
                                         &bp,
                                         d2dCoverBitmap_.GetAddressOf());
-                                    Log("[COVER] D2D bitmap via pixels: hr=0x%08X, bitmap=%d size=%ux%u\n",
+                                    if (debugLog_) Log("[COVER] D2D bitmap via pixels: hr=0x%08X, bitmap=%d size=%ux%u\n",
                                         hr, d2dCoverBitmap_ ? 1 : 0, w, h);
                                 }
                             }

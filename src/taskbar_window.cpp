@@ -4,6 +4,7 @@
 // (类似 TrafficMonitor / TranslucentTB 的实现方式)
 #include "taskbar_window.h"
 #include "constants.h"
+#include "logger.h"
 
 #include <shellapi.h>
 #include <windows.h>
@@ -23,6 +24,8 @@ RECT TaskbarWindow::s_frozenTaskbarRect_{};
 RECT TaskbarWindow::s_lastGoodTaskbarRect_{};
 HWINEVENTHOOK TaskbarWindow::s_foregroundHook_      = nullptr;
 bool          TaskbarWindow::s_lockedByStartMenuFg_ = false;
+TaskbarWindow* TaskbarWindow::s_instance_           = nullptr;
+bool          TaskbarWindow::s_forceDebounceReset_  = false;
 
 void CALLBACK TaskbarWinEventProc(HWINEVENTHOOK, DWORD, HWND hWnd,
                                    LONG idObject, LONG, DWORD, DWORD) {
@@ -72,6 +75,14 @@ void CALLBACK ShellMenuWinEventProc(HWINEVENTHOOK, DWORD event, HWND,
                            TaskbarWindow::s_frozenTaskbarRect_.bottom);
                 ::OutputDebugStringW(dbg);
             }
+        }
+
+        // 全屏隐藏时，按 Win 键呼出开始菜单应该立即恢复歌词显示。
+        // 不等待防抖（全屏应用可能仍占前台 → main.cpp IsForegroundFullscreen 持续为 true → 迟迟不恢复）。
+        // 此处直接调用 SetFullscreenHidden(false) 恢复窗口，并设置标志位通知 main.cpp 重置防抖计数器。
+        if (TaskbarWindow::s_instance_ && TaskbarWindow::s_instance_->fullscreenHidden_) {
+            ::OutputDebugStringW(L"[TaskbarLyrics] MENUPOPUPSTART: fullscreen hidden, restoring immediately\n");
+            TaskbarWindow::s_instance_->SetFullscreenHidden(false);
         }
     } else if (event == EVENT_SYSTEM_MENUPOPUPEND) {
         ::OutputDebugStringW(L"[TaskbarLyrics] MENUPOPUPEND: scheduling unlock (300ms)\n");
@@ -238,11 +249,13 @@ bool TaskbarWindow::Create(HINSTANCE hInstance, HWND hParent) {
     // 6) 监听任务栏位置变化（auto-hide 滑出、Win 键、DPI 变化等）
     InstallTaskbarHook(hwnd_);
 
+    s_instance_ = this;
     created_ = true;
     return true;
 }
 
 void TaskbarWindow::Destroy() {
+    s_instance_ = nullptr;
     RemoveTaskbarHook();
     CleanupUIAutomation();
     if (hwnd_) {
@@ -250,6 +263,48 @@ void TaskbarWindow::Destroy() {
         hwnd_ = nullptr;
     }
     created_ = false;
+}
+
+void TaskbarWindow::SetFullscreenHidden(bool hidden) {
+    if (fullscreenHidden_ == hidden) return;
+    fullscreenHidden_ = hidden;
+    if (!hwnd_) return;
+
+    if (hidden) {
+        Log("[TaskbarWindow] SetFullscreenHidden(true): hiding window (hwnd=%p)\n", hwnd_);
+
+        // 全屏隐藏时主动释放 Start Menu 冻结锁：
+        // 全屏游戏激活时常触发 MENUPOPUPSTART 全局事件却永不发送 MENUPOPUPEND，
+        // 导致 s_shellInteractionLocked_ 永久锁死，CheckResize/PositionLyricsInTaskbar 冻结。
+        // 此处强制解冻，确保后续恢复显示时定位正常。
+        if (s_shellInteractionLocked_) {
+            s_shellInteractionLocked_ = false;
+            s_lockedByStartMenuFg_ = false;
+            Log("[TaskbarWindow] SetFullscreenHidden: released freeze lock\n");
+        }
+
+        // 使用 SetWindowPos(SWP_HIDEWINDOW) 而非 ShowWindow(SW_HIDE)：
+        // ShowWindow 会发送 WM_SHOWWINDOW 消息，owned window 的 owner (Shell_TrayWnd)
+        // 可能拦截或覆盖显隐状态。SWP_HIDEWINDOW 直接操作 WS_VISIBLE 位，更可靠。
+        // 同时移到屏幕外作为双重保险（防止 UpdateLayeredWindow 在隐藏过程中闪现）。
+        ::SetWindowPos(hwnd_, nullptr,
+                       -32000, -32000, 0, 0,
+                       SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        Log("[TaskbarWindow] SetFullscreenHidden: SWP_HIDEWINDOW + offscreen done\n");
+    } else {
+        Log("[TaskbarWindow] SetFullscreenHidden(false): restoring window\n");
+        // 通知 main.cpp 重置全屏检测防抖计数器。
+        // Shell 交互（MENUPOPUPSTART）触发的恢复需要防抖清零，否则下一帧全屏检测读到
+        // 前台仍是全屏应用（isFullscreen==true），会继续往 fullscreen 方向计数。
+        // 正常恢复路径（全屏应用关闭）也设此标志，无害（idempotent reset）。
+        s_forceDebounceReset_ = true;
+        // 恢复显示：移回可见区域（具体位置由下一帧 PositionLyricsInTaskbar 重新计算）
+        // HWND_TOPMOST 确保从 owned Z-order 中脱离后正确叠放
+        ::SetWindowPos(hwnd_, HWND_TOPMOST,
+                       0, 0, 0, 0,
+                       SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        Log("[TaskbarWindow] SetFullscreenHidden: SWP_SHOWWINDOW done, awaiting reposition\n");
+    }
 }
 
 void TaskbarWindow::DetectTaskbarInfo() {
@@ -296,6 +351,9 @@ void TaskbarWindow::DetectTaskbarInfo() {
 
 void TaskbarWindow::PositionLyricsInTaskbar() {
     if (!hwnd_ || !hTaskbar_) return;
+
+    // 全屏隐藏期间跳过定位：SetWindowPos(SWP_SHOWWINDOW) 会重新显示已隐藏的窗口
+    if (fullscreenHidden_) return;
 
     // Start Menu 激活期间：Explorer 内部布局不可靠（托盘重排、client width 微变、
     // 任务栏按钮区域右扩等）。所有几何输入（GetWindowRect、子窗口枚举）均不可靠。
@@ -688,6 +746,10 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
 void TaskbarWindow::CheckResize() {
     if (!hTaskbar_) return;
 
+    // 全屏隐藏期间跳过重检测：避免 WM_DELAYED_REPOSITION → PositionLyricsInTaskbar
+    // 中 SetWindowPos(SWP_SHOWWINDOW) 重新显示已隐藏的窗口
+    if (fullscreenHidden_) return;
+
     // Start Menu 激活期间跳过帧级重检测：冻结模式下已使用稳定快照定位，
     // 无需在此轮询 GetWindowRect 规避 Explorer 临时脏写。
     // 同时防止 MENUPOPUPSTART 尚未设置锁时 CheckResize 抢先触发未保护的 PositionLyricsInTaskbar。
@@ -793,6 +855,9 @@ HoverButton TaskbarWindow::HitTestButton(int x, int y) const {
 
 void TaskbarWindow::SnapToEmptySpace() {
     if (!hwnd_ || !hTaskbar_) return;
+
+    // 全屏隐藏期间跳过吸附：避免 SetWindowPos 重新显示已隐藏的窗口
+    if (fullscreenHidden_) return;
 
     RECT winRect{};
     ::GetWindowRect(hwnd_, &winRect);
