@@ -133,7 +133,7 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
             cardCurrentFormat_.GetAddressOf());
         if (cardCurrentFormat_) {
             cardCurrentFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-            cardCurrentFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            cardCurrentFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             cardCurrentFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
         dwriteFactory_->CreateTextFormat(
@@ -146,7 +146,7 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
             cardNextFormat_.GetAddressOf());
         if (cardNextFormat_) {
             cardNextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-            cardNextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            cardNextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             cardNextFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
     }
@@ -216,6 +216,8 @@ void TaskbarRenderer::Shutdown() {
     cardNextBrush_.Reset();
     cardCurrentBrush_.Reset();
     d2dCoverBitmap_.Reset();
+    cachedCoverUrl_.clear();       // 清除 URL 缓存，避免重建后误判无需下载
+    pendingCoverFile_.clear();     // 清除待消费的临时文件
     cardNextFormat_.Reset();
     cardCurrentFormat_.Reset();
     translationBrush_.Reset();
@@ -527,9 +529,9 @@ void TaskbarRenderer::RenderCardStyle(const RenderState& state) {
 
         const float t = cardAnimProgress_;
 
-        // 旧轨道：位移 0→-halfH（向上滑出）；透明度 1→0
-        const float upOffset = -EaseInOutQuad(t) * halfH;
-        const float fadeOutAlpha = std::max(0.0f, 1.0f - EaseInOutQuad(t));
+        // 旧轨道：位移 0→-halfH（向上滑出，线性更快离开）；透明度 (1-t)² 快淡出
+        const float upOffset = -t * halfH;
+        const float fadeOutAlpha = std::max(0.0f, (1.0f - t) * (1.0f - t));
 
         // 新轨道：位移 halfH→0（从下方滑入）；透明度 0→1
         const float inOffset = (1.0f - EaseOutBack(t)) * halfH;
@@ -544,20 +546,22 @@ void TaskbarRenderer::RenderCardStyle(const RenderState& state) {
 
         // ═════ 旧轨道（仅保留旧下一行：向上滑入当前行位置 + 淡出） ═════
         // 旧当前行直接消失（无淡出动画），避免同位置出现两行文字的重影
+        const float vNudgeCur = 4.0f * dpiScale;
+        const float vNudgeNext = 2.0f * dpiScale;
         if (!oldNextW.empty()) {
-            DrawCardLyricsSingle(oldNextW, lyricsX, halfH, lyricsWidth,
+            DrawCardLyricsSingle(oldNextW, lyricsX, halfH - vNudgeNext, lyricsWidth,
                                  upOffset, fadeOutAlpha,
                                  /*isCurrent=*/false);
         }
 
         // ═════ 新轨道（从下方滑入 + 淡入） ═════
         if (!curW.empty()) {
-            DrawCardLyricsSingle(curW, lyricsX, 0.0f, lyricsWidth,
+            DrawCardLyricsSingle(curW, lyricsX, vNudgeCur, lyricsWidth,
                                  inOffset, fadeInAlpha,
                                  /*isCurrent=*/true);
         }
         if (!nextW.empty()) {
-            DrawCardLyricsSingle(nextW, lyricsX, halfH, lyricsWidth,
+            DrawCardLyricsSingle(nextW, lyricsX, halfH - vNudgeNext, lyricsWidth,
                                  inOffset, fadeInAlpha,
                                  /*isCurrent=*/false);
         }
@@ -613,7 +617,7 @@ void TaskbarRenderer::RenderCardStyleVertical(const RenderState& state) {
         && cardAnimProgress_ < 1.0f) {
 
         const float t = cardAnimProgress_;
-        const float fadeOutAlpha = std::max(0.0f, 1.0f - EaseInOutQuad(t));
+        const float fadeOutAlpha = std::max(0.0f, (1.0f - t) * (1.0f - t));
         const float fadeInAlpha = EaseOutCubic(std::min(t / 0.85f, 1.0f));
 
         std::wstring oldCurW = Utf8ToWide(cardPrevCurrentLine_);
@@ -622,21 +626,25 @@ void TaskbarRenderer::RenderCardStyleVertical(const RenderState& state) {
         D2D1_RECT_F clipRect = D2D1::RectF(paddingX, lyricsTop, w - paddingX, h);
         renderTarget_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
+        const float vNudgeCur = 4.0f * dpiScale;
+        const float vNudgeNext = 2.0f * dpiScale;
+        const float halfH = h * 0.50f;
+
         // 旧内容淡出（仅保留旧下一行）
         if (!oldNextW.empty()) {
-            DrawCardLyricsSingle(oldNextW, paddingX, lyricsTop, lyricsWidth,
+            DrawCardLyricsSingle(oldNextW, paddingX, lyricsTop + halfH - vNudgeNext, lyricsWidth,
                                  0.0f, fadeOutAlpha,
                                  /*isCurrent=*/false);
         }
 
         // 新内容淡入
         if (!curW.empty()) {
-            DrawCardLyricsSingle(curW, paddingX, lyricsTop, lyricsWidth,
+            DrawCardLyricsSingle(curW, paddingX, lyricsTop + vNudgeCur, lyricsWidth,
                                  0.0f, fadeInAlpha,
                                  /*isCurrent=*/true);
         }
         if (!nextW.empty()) {
-            DrawCardLyricsSingle(nextW, paddingX, lyricsTop, lyricsWidth,
+            DrawCardLyricsSingle(nextW, paddingX, lyricsTop + halfH - vNudgeNext, lyricsWidth,
                                  0.0f, fadeInAlpha,
                                  /*isCurrent=*/false);
         }
@@ -711,9 +719,23 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
                 Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
                 hr = wicFactory_->CreateBitmapScaler(scaler.GetAddressOf());
                 if (SUCCEEDED(hr)) {
-                    UINT targetSize = static_cast<UINT>(size + 0.5f);
-                    hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
-                                            WICBitmapInterpolationModeFant);
+                    // 获取原始图片尺寸，计算等比例缩放目标尺寸
+                    UINT srcW = 0, srcH = 0;
+                    frame->GetSize(&srcW, &srcH);
+                    UINT targetSize = static_cast<UINT>(std::ceil(size));
+                    UINT scaleW = targetSize, scaleH = targetSize;
+                    if (srcW > 0 && srcH > 0) {
+                        double srcAspect = static_cast<double>(srcW) / static_cast<double>(srcH);
+                        if (srcAspect > 1.0001) {
+                            // 宽图：宽度撑满，高度按比例
+                            scaleH = static_cast<UINT>(std::max(1.0, targetSize / srcAspect));
+                        } else if (srcAspect < 0.9999) {
+                            // 高图：高度撑满，宽度按比例
+                            scaleW = static_cast<UINT>(std::max(1.0, targetSize * srcAspect));
+                        }
+                    }
+                    hr = scaler->Initialize(frame.Get(), scaleW, scaleH,
+                                            WICBitmapInterpolationModeHighQualityCubic);
                     if (SUCCEEDED(hr)) {
                         // 将缩放后的图像转换为 BGRA 像素数据
                         Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
@@ -740,8 +762,13 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
                                     D2D1_BITMAP_PROPERTIES bp = {};
                                     bp.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
                                     bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
-                                    bp.dpiX = static_cast<float>(dpi_);
-                                    bp.dpiY = static_cast<float>(dpi_);
+                                    // 位图 DPI 设为 96（基准值），使像素尺寸与 DIP 1:1 对应。
+                                    // 因为此处的 w/h 已是按当前 DPI 缩放后的物理像素，
+                                    // 绘制矩形的 size 也同样是物理像素值（render target DPI == 屏幕 DPI），
+                                    // 若设为 dpi_（>96）会导致 D2D 将位图解释为比实际更小的 DIPs，
+                                    // 造成 FillRoundedRectangle 时位图区域不足，边缘像素被 CLAMP 拉伸。
+                                    bp.dpiX = 96.0f;
+                                    bp.dpiY = 96.0f;
 
                                     hr = renderTarget_->CreateBitmap(
                                         D2D1::SizeU(w, h),
@@ -771,13 +798,41 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
         D2D1::RectF(x, y, x + size, y + size), radius, radius);
 
     if (d2dCoverBitmap_) {
-        // 有封面位图：绘制圆角裁剪的图片
-        Microsoft::WRL::ComPtr<ID2D1BitmapBrush> bitmapBrush;
-        renderTarget_->CreateBitmapBrush(d2dCoverBitmap_.Get(), bitmapBrush.GetAddressOf());
-        if (bitmapBrush) {
-            bitmapBrush->SetExtendModeX(D2D1_EXTEND_MODE_CLAMP);
-            bitmapBrush->SetExtendModeY(D2D1_EXTEND_MODE_CLAMP);
-            renderTarget_->FillRoundedRectangle(rr, bitmapBrush.Get());
+        // 有封面位图：使用圆角矩形几何裁剪 + DrawBitmap 绘制，
+        // 替代 BitmapBrush+FillRoundedRectangle 以避免画笔原点错位问题。
+        // BitmapBrush 默认从 (0,0) 采样，需平移才能对齐到 (x,y)；
+        // 非正方形位图还需居中，图层裁剪方案统一处理这两种情况。
+
+        D2D1_SIZE_F bmpSize = d2dCoverBitmap_->GetSize();
+        float bmpW = bmpSize.width;
+        float bmpH = bmpSize.height;
+
+        // 将位图居中于封面正方形区域内
+        float drawX = x + (size - bmpW) / 2.0f;
+        float drawY = y + (size - bmpH) / 2.0f;
+        D2D1_RECT_F destRect = D2D1::RectF(drawX, drawY, drawX + bmpW, drawY + bmpH);
+
+        // 创建圆角矩形裁剪几何
+        Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> clipGeo;
+        HRESULT geoHr = d2dFactory_->CreateRoundedRectangleGeometry(
+            rr, clipGeo.GetAddressOf());
+        if (SUCCEEDED(geoHr) && clipGeo) {
+            Microsoft::WRL::ComPtr<ID2D1Layer> layer;
+            D2D1_SIZE_F layerSize = D2D1::SizeF(size, size);
+            HRESULT layerHr = renderTarget_->CreateLayer(&layerSize, layer.GetAddressOf());
+            if (SUCCEEDED(layerHr) && layer) {
+                D2D1_LAYER_PARAMETERS layerParams = D2D1::LayerParameters(
+                    D2D1::InfiniteRect(), clipGeo.Get(),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    D2D1::IdentityMatrix(),
+                    1.0f, nullptr,
+                    D2D1_LAYER_OPTIONS_NONE);
+                renderTarget_->PushLayer(layerParams, layer.Get());
+                renderTarget_->DrawBitmap(
+                    d2dCoverBitmap_.Get(), destRect, 1.0f,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
+                renderTarget_->PopLayer();
+            }
         }
     } else {
         // 无封面：显示灰底圆角矩形 + 音乐符号
@@ -838,14 +893,18 @@ void TaskbarRenderer::DrawCardLyrics(const std::wstring& currentLine,
                                      float /*curFontSizeScale*/, float /*nextFontSizeScale*/) {
     if (!renderTarget_ || alpha <= 0.001f) return;
 
+    const float dpiScale = static_cast<float>(dpi_) / 96.0f;
+    const float vNudgeCur = 4.0f * dpiScale;   // 主歌词下移 4dp
+    const float vNudgeNext = 2.0f * dpiScale;  // 副歌词上移 2dp
+    const float halfH = static_cast<float>(height_) * 0.50f;
+
     if (!currentLine.empty()) {
-        DrawCardLyricsSingle(currentLine, x, y, availWidth, yOffset, alpha,
+        DrawCardLyricsSingle(currentLine, x, y + vNudgeCur, availWidth, yOffset, alpha,
                              /*isCurrent=*/true);
     }
 
-    const float halfH = static_cast<float>(height_) * 0.50f;
     if (!nextLine.empty()) {
-        DrawCardLyricsSingle(nextLine, x, y + halfH, availWidth, yOffset, alpha,
+        DrawCardLyricsSingle(nextLine, x, y + halfH - vNudgeNext, availWidth, yOffset, alpha,
                              /*isCurrent=*/false);
     }
 }
@@ -1254,8 +1313,8 @@ float TaskbarRenderer::EaseOutBack(float t) {
 
 bool TaskbarRenderer::UpdateCardAnim(const std::string& currentLine,
                                      const std::string& nextLine) {
-    // 动画持续时间：500ms（流畅不拖沓）
-    constexpr double kDuration = 0.50;
+    // 动画持续时间：350ms（快速过渡，减少新旧歌词重叠）
+    constexpr double kDuration = 0.35;
 
     bool lineChanged = (currentLine != cardLastCurrentLine_);
     if (lineChanged && !currentLine.empty() && !cardLastCurrentLine_.empty()) {

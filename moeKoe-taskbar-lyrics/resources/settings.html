@@ -265,15 +265,6 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
         </select>
     </div>
 
-    <!-- ═════ 共享设置（卡拉OK/卡片模式均可见） ═════ -->
-    <div class="row">
-        <label>字体</label>
-        <div style="display:flex; gap:6px; align-items:center;">
-            <input type="text" id="fontFamily" style="width:118px;" readonly>
-            <button id="pickFontBtn" style="padding:5px 12px; font-size:11px;">选择</button>
-        </div>
-    </div>
-
     <!-- ═════ 卡拉OK模式选项（仅 karaoke 时显示） ═════ -->
     <div id="karaokeSection">
 
@@ -281,7 +272,15 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
         <label>字号</label>
         <div class="slider-wrap">
             <input type="range" id="fontSize" min="10" max="28" step="1" value="20">
-            <span class="slider-value" id="fontSizeVal">20"></span>
+            <span class="slider-value" id="fontSizeVal">20</span>
+        </div>
+    </div>
+
+    <div class="row">
+        <label>字体</label>
+        <div style="display:flex; gap:6px; align-items:center;">
+            <input type="text" id="fontFamily" style="width:118px;" readonly>
+            <button id="pickFontBtn" style="padding:5px 12px; font-size:11px;">选择</button>
         </div>
     </div>
 
@@ -452,6 +451,7 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     <div class="btn-row">
         <button id="applyBtn" class="primary">应用并保存</button>
         <button id="cancelBtn">取消</button>
+        <button id="switchToD2DBtn">切换到原生设置</button>
     </div>
 </div>
 
@@ -460,7 +460,7 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
     <div class="section-title">使用教程</div>
     <div style="padding:8px 14px 12px; font-size:12px; line-height:1.6;">
         <p><strong>在插件市场安装此插件后授予权限即可，其余操作无需额外配置，本插件会自动配置。</strong></p>
-    </div>
+        </div>
 </div>
 
 <div class="footer">MoeKoe Taskbar Lyrics v0.4.1</div>
@@ -661,6 +661,10 @@ document.getElementById('resetPos').addEventListener('click', () => {
 
 document.getElementById('pickFontBtn').addEventListener('click', () => {
     sendToHost({ type: 'pickFont' });
+});
+
+document.getElementById('switchToD2DBtn').addEventListener('click', () => {
+    sendToHost({ type: 'switchMode', mode: 'd2d' });
 });
 
 // 初始化：请求配置
