@@ -292,6 +292,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     windowsapp        # C++/WinRT 运行时 (SMTC)
     ${WEBVIEW2_LOADER_LIB}
     dwmapi            # DWM 圆角窗口 (D2D 设置界面)
+    UIAutomationCore   # UI Automation: 获取任务栏子窗口几何信息
 )
 
 # 资源

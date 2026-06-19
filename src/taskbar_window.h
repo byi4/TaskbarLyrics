@@ -12,6 +12,7 @@
 #include "lyrics_data.h"
 
 #include <windows.h>
+#include <UIAutomation.h>
 
 #include <cstdint>
 #include <functional>
@@ -119,6 +120,14 @@ public:
     static HWND s_lyricsWnd_;
     static bool s_shellInteractionLocked_;    // Start Menu 激活期间锁定定位
     static RECT s_frozenTaskbarRect_;         // 锁定时冻结的任务栏几何快照
+    static RECT s_lastGoodTaskbarRect_;      // 非冻结期间已知稳定 rect（供冻结快照使用，避免 Explorer 脏写污染）
+    static HWINEVENTHOOK s_foregroundHook_;      // Win11 Start Menu 前台检测
+    static bool          s_lockedByStartMenuFg_; // 前台 Hook 设置的锁（与 MENUPOPUPSTART 区分来源）
+
+    friend void CALLBACK ShellMenuWinEventProc(HWINEVENTHOOK, DWORD event, HWND,
+                                               LONG, LONG, DWORD, DWORD);
+    friend void CALLBACK ForegroundWinEventProc(HWINEVENTHOOK, DWORD, HWND,
+                                                 LONG, LONG, DWORD, DWORD);
 
 private:
     // 窗口过程(静态 + 实例)
@@ -131,6 +140,19 @@ private:
 
     /// 拖动松开后检测是否与其他任务栏子窗口重叠，若重叠则弹到最近的空闲位置
     void SnapToEmptySpace();
+
+    // UI Automation: 初始化/清理 IUIAutomation 实例
+    void InitUIAutomation();
+    void CleanupUIAutomation();
+
+    /// 使用 UIA 枚举 Shell_TrayWnd 子窗口，获取关键区域的屏幕矩形。
+    /// 替代 EnumChildWindows + GetWindowRect，从根本上解决 Win 键导致
+    /// Explorer 内部临时脏写（right 膨胀）造成的歌词偏移问题。
+    /// @return true 表示 UIA 枚举成功，false 表示 UIA 不可用（需降级）
+    bool GetChildRectsByUIA(RECT& taskListRect, bool& foundTaskList,
+                            RECT& trayRect,    bool& foundTray,
+                            RECT& rebarRect,   bool& foundRebar,
+                            int   tbWidth);
 
     // 状态
     HINSTANCE     hInstance_{nullptr};
@@ -147,6 +169,8 @@ private:
     bool          taskbarAutoHide_{false}; // 任务栏自动隐藏状态
     bool          taskbarVisible_{false};   // 任务栏当前是否可见
     RECT          stableTaskbarRect_{};     // 稳定帧矩形（动画期间不更新）
+    RECT          stableTaskListRect_{};    // 任务列表子窗口稳定矩形（动画期间不更新）
+    bool          stableTaskListValid_{false};
     int           cachedRightEdgeOffset_{0}; // tbRect.right - rightEdge 缓存（动画期间防射线位置跳动）
     POINT         dragStartPos_{0, 0};     // 拖动开始时鼠标屏幕坐标
     POINT         dragStartWinPos_{0, 0};  // 拖动开始时窗口屏幕坐标
@@ -157,6 +181,9 @@ private:
 
     ButtonCallback onButtonClicked_;
     HoverChangedCallback onHoverChanged_;
+
+    // UI Automation
+    IUIAutomation* uia_{nullptr};             // UIA 实例，用于获取任务栏子窗口几何信息
 
 };
 

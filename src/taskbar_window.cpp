@@ -20,6 +20,9 @@ HWINEVENTHOOK TaskbarWindow::s_shellMenuHook_ = nullptr;
 HWND TaskbarWindow::s_lyricsWnd_ = nullptr;
 bool TaskbarWindow::s_shellInteractionLocked_ = false;
 RECT TaskbarWindow::s_frozenTaskbarRect_{};
+RECT TaskbarWindow::s_lastGoodTaskbarRect_{};
+HWINEVENTHOOK TaskbarWindow::s_foregroundHook_      = nullptr;
+bool          TaskbarWindow::s_lockedByStartMenuFg_ = false;
 
 void CALLBACK TaskbarWinEventProc(HWINEVENTHOOK, DWORD, HWND hWnd,
                                    LONG idObject, LONG, DWORD, DWORD) {
@@ -39,19 +42,86 @@ void CALLBACK TaskbarWinEventProc(HWINEVENTHOOK, DWORD, HWND hWnd,
 void CALLBACK ShellMenuWinEventProc(HWINEVENTHOOK, DWORD event, HWND,
                                      LONG, LONG, DWORD, DWORD) {
     if (event == EVENT_SYSTEM_MENUPOPUPSTART) {
-        // 锁定定位 + 冻结当前任务栏几何快照
+        // 锁定定位 + 冻结任务栏几何快照
         // Explorer 在 Start Menu 激活期间会临时改动任务栏内部布局（托盘重排、
-        // client width 微变），导致 GetWindowRect 返回值虽不变但子区域偏移了。
-        // 快照冻结确保后续所有布局计算基于锁定前的稳定值。
+        // client width 微变），导致 GetWindowRect 返回值被污染（right 膨胀 +3~7px）。
+        // 使用 s_lastGoodTaskbarRect_（PositionLyricsInTaskbar 非冻结模式时缓存的最后稳定 rect），
+        // 彻底隔离 Explorer 的瞬时脏写。
         TaskbarWindow::s_shellInteractionLocked_ = true;
-        HWND tb = ::FindWindowW(L"Shell_TrayWnd", nullptr);
-        if (tb) {
-            ::GetWindowRect(tb, &TaskbarWindow::s_frozenTaskbarRect_);
+        if (TaskbarWindow::s_lastGoodTaskbarRect_.right != 0) {
+            TaskbarWindow::s_frozenTaskbarRect_ = TaskbarWindow::s_lastGoodTaskbarRect_;
+            wchar_t dbg[160];
+            swprintf_s(dbg, L"[TaskbarLyrics] MENUPOPUPSTART: lock ON, frozen=(%d,%d,%d,%d)"
+                       L" from s_lastGoodTaskbarRect_\n",
+                       TaskbarWindow::s_frozenTaskbarRect_.left,
+                       TaskbarWindow::s_frozenTaskbarRect_.top,
+                       TaskbarWindow::s_frozenTaskbarRect_.right,
+                       TaskbarWindow::s_frozenTaskbarRect_.bottom);
+            ::OutputDebugStringW(dbg);
+        } else {
+            // 降级：冷启动时 s_lastGoodTaskbarRect_ 尚未初始化（首次定位尚未执行）
+            HWND tb = ::FindWindowW(L"Shell_TrayWnd", nullptr);
+            if (tb) {
+                ::GetWindowRect(tb, &TaskbarWindow::s_frozenTaskbarRect_);
+                wchar_t dbg[160];
+                swprintf_s(dbg, L"[TaskbarLyrics] MENUPOPUPSTART: lock ON, frozen=(%d,%d,%d,%d)"
+                           L" from GetWindowRect (cold boot fallback)\n",
+                           TaskbarWindow::s_frozenTaskbarRect_.left,
+                           TaskbarWindow::s_frozenTaskbarRect_.top,
+                           TaskbarWindow::s_frozenTaskbarRect_.right,
+                           TaskbarWindow::s_frozenTaskbarRect_.bottom);
+                ::OutputDebugStringW(dbg);
+            }
         }
     } else if (event == EVENT_SYSTEM_MENUPOPUPEND) {
+        ::OutputDebugStringW(L"[TaskbarLyrics] MENUPOPUPEND: scheduling unlock (300ms)\n");
         if (TaskbarWindow::s_lyricsWnd_) {
             ::SetTimer(TaskbarWindow::s_lyricsWnd_, 3, 300, nullptr);
         }
+    }
+}
+
+void CALLBACK ForegroundWinEventProc(HWINEVENTHOOK, DWORD, HWND hWnd,
+                                      LONG, LONG, DWORD, DWORD) {
+    if (!hWnd || !TaskbarWindow::s_lyricsWnd_) return;
+
+    // 获取前台窗口的可执行文件名
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(hWnd, &pid);
+    if (!pid) return;
+
+    HANDLE hProc = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc) return;
+
+    wchar_t path[MAX_PATH] = {};
+    DWORD sz = MAX_PATH;
+    ::QueryFullProcessImageNameW(hProc, 0, path, &sz);
+    ::CloseHandle(hProc);
+
+    const wchar_t* exeName = ::wcsrchr(path, L'\\');
+    exeName = exeName ? exeName + 1 : path;
+
+    // Win11 Start Menu / Search 叠加层判断
+    const bool isStartMenu =
+        (::_wcsicmp(exeName, L"StartMenuExperienceHost.exe") == 0) ||
+        (::_wcsicmp(exeName, L"SearchHost.exe") == 0);
+
+    if (isStartMenu) {
+        if (!TaskbarWindow::s_shellInteractionLocked_) {
+            TaskbarWindow::s_shellInteractionLocked_ = true;
+            TaskbarWindow::s_lockedByStartMenuFg_    = true;
+            if (TaskbarWindow::s_lastGoodTaskbarRect_.right != 0) {
+                TaskbarWindow::s_frozenTaskbarRect_ = TaskbarWindow::s_lastGoodTaskbarRect_;
+            }
+            ::OutputDebugStringW(
+                L"[TaskbarLyrics] ForegroundHook: StartMenu ON, lock set\n");
+        }
+    } else if (TaskbarWindow::s_lockedByStartMenuFg_) {
+        // 前台离开 Start Menu → 300ms 后解锁
+        TaskbarWindow::s_lockedByStartMenuFg_ = false;
+        ::SetTimer(TaskbarWindow::s_lyricsWnd_, 4, 300, nullptr);
+        ::OutputDebugStringW(
+            L"[TaskbarLyrics] ForegroundHook: StartMenu OFF, unlock in 300ms\n");
     }
 }
 
@@ -65,6 +135,13 @@ void TaskbarWindow::InstallTaskbarHook(HWND lyricsWnd) {
         EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPEND,
         nullptr, ShellMenuWinEventProc,
         0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    // Win11 Start Menu 检测（Win 键 / Win+S 叠加层）
+    // StartMenuExperienceHost.exe 是独立进程，不触发 MENUPOPUPSTART，
+    // 因此需要 EVENT_SYSTEM_FOREGROUND 来捕获前台切换。
+    s_foregroundHook_ = ::SetWinEventHook(
+        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+        nullptr, ForegroundWinEventProc,
+        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 }
 
 void TaskbarWindow::RemoveTaskbarHook() {
@@ -76,6 +153,11 @@ void TaskbarWindow::RemoveTaskbarHook() {
         ::UnhookWinEvent(s_shellMenuHook_);
         s_shellMenuHook_ = nullptr;
     }
+    if (s_foregroundHook_) {
+        ::UnhookWinEvent(s_foregroundHook_);
+        s_foregroundHook_ = nullptr;
+    }
+    s_lockedByStartMenuFg_ = false;
     s_lyricsWnd_ = nullptr;
 }
 
@@ -146,11 +228,14 @@ bool TaskbarWindow::Create(HINSTANCE hInstance, HWND hParent) {
     // 始终渲染在任务栏上方，无需 HWND_TOPMOST 竞争，不受 Win 键 Start Menu 影响
     ::SetWindowLongPtrW(hwnd_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(hTaskbar_));
 
-    // 4) 初始化信息并定位
+    // 4) 初始化 UI Automation（用于获取任务栏子窗口几何，替代 EnumChildWindows）
+    InitUIAutomation();
+
+    // 5) 初始化信息并定位
     DetectTaskbarInfo();
     PositionLyricsInTaskbar();
 
-    // 5) 监听任务栏位置变化（auto-hide 滑出、Win 键、DPI 变化等）
+    // 6) 监听任务栏位置变化（auto-hide 滑出、Win 键、DPI 变化等）
     InstallTaskbarHook(hwnd_);
 
     created_ = true;
@@ -159,6 +244,7 @@ bool TaskbarWindow::Create(HINSTANCE hInstance, HWND hParent) {
 
 void TaskbarWindow::Destroy() {
     RemoveTaskbarHook();
+    CleanupUIAutomation();
     if (hwnd_) {
         ::DestroyWindow(hwnd_);
         hwnd_ = nullptr;
@@ -211,9 +297,16 @@ void TaskbarWindow::DetectTaskbarInfo() {
 void TaskbarWindow::PositionLyricsInTaskbar() {
     if (!hwnd_ || !hTaskbar_) return;
 
-    // Start Menu 激活期间：Explorer 内部布局不可靠（托盘重排、client width 微变）
-    // 使用锁定前捕获的冻结快照，完全隔离 Explorer 的临时变动
+    // Start Menu 激活期间：Explorer 内部布局不可靠（托盘重排、client width 微变、
+    // 任务栏按钮区域右扩等）。所有几何输入（GetWindowRect、子窗口枚举）均不可靠。
+    // 冻结期间完全跳过重定位：窗口已在前序非冻结调用中正确定位，保持不变即可。
+    // 这同时修复了「弹开效果」—— taskListRect.right 受 Explorer 污染导致
+    // availableWidth 收窄 → w 缩小 → x 右移（歌词被「弹开」到右侧）。
     const bool useFrozen = s_shellInteractionLocked_ && s_frozenTaskbarRect_.right != 0;
+    if (useFrozen) {
+        ::OutputDebugStringW(L"[TaskbarLyrics] PositionLyricsInTaskbar: frozen → skip\n");
+        return;
+    }
 
     // 记录旧方位，用于检测方向变化
     const TaskbarPosition oldPosition = info_.position;
@@ -229,79 +322,226 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
     }
 
     // ── 自动隐藏状态跟踪（不干预定位，仅记录状态）──
-    // 冻结模式下跳过实时状态检测
-    if (!useFrozen) {
-        if (taskbarAutoHide_) {
-            RECT tbCurrent{};
-            ::GetWindowRect(hTaskbar_, &tbCurrent);
-            const int tbSize = (info_.position == TaskbarPosition::LEFT ||
-                                info_.position == TaskbarPosition::RIGHT)
-                                   ? (tbCurrent.right - tbCurrent.left)
-                                   : (tbCurrent.bottom - tbCurrent.top);
-            constexpr int kAutoHideThreshold = 10;
-            taskbarVisible_ = (tbSize >= kAutoHideThreshold);
-        } else {
-            taskbarVisible_ = true;
-        }
+    if (taskbarAutoHide_) {
+        RECT tbCurrent{};
+        ::GetWindowRect(hTaskbar_, &tbCurrent);
+        const int tbSize = (info_.position == TaskbarPosition::LEFT ||
+                            info_.position == TaskbarPosition::RIGHT)
+                               ? (tbCurrent.right - tbCurrent.left)
+                               : (tbCurrent.bottom - tbCurrent.top);
+        constexpr int kAutoHideThreshold = 10;
+        taskbarVisible_ = (tbSize >= kAutoHideThreshold);
+    } else {
+        taskbarVisible_ = true;
     }
 
     RECT tbRect{};
-    if (useFrozen) {
-        tbRect = s_frozenTaskbarRect_;
-    } else {
-        ::GetWindowRect(hTaskbar_, &tbRect);
+    ::GetWindowRect(hTaskbar_, &tbRect);
+
+    lastTaskbarRect_ = tbRect;
+    // 同步稳定 rect 到静态缓存，供 ShellMenuWinEventProc 冻结快照使用
+    // 避免 EVENT_SYSTEM_MENUPOPUPSTART 时 GetWindowRect 返回 Explorer 脏写的膨胀值
+    s_lastGoodTaskbarRect_ = tbRect;
+    const int tbWidth  = tbRect.right  - tbRect.left;
+    const int tbHeight = tbRect.bottom - tbRect.top;
+
+    // 使用 UI Automation 枚举任务栏子窗口，找到关键区域的屏幕矩形
+    // 替代 EnumChildWindows + GetWindowRect：
+    // Win 键按下时 Explorer 会瞬时修改子窗口内部布局（如 DesktopWindowContentBridge.right
+    // 膨胀 +3~7px），GetWindowRect 直接暴露这些瞬时脏写导致歌词向右偏移。
+    // UIA 的 BoundingRectangle 由 UIAutomationCore 维护、经过内部稳定化处理，
+    // 不受 Explorer 瞬态脏写影响，从根本上解决偏移问题。
+    RECT taskListRect = {};
+    bool foundTaskList = false;
+    RECT trayRect = {};
+    bool foundTray = false;
+    RECT rebarRect = {};
+    bool foundRebar = false;
+
+    if (!GetChildRectsByUIA(taskListRect, foundTaskList,
+                            trayRect, foundTray,
+                            rebarRect, foundRebar,
+                            tbWidth)) {
+        // 降级：UIA 不可用时回退到传统 EnumChildWindows 方式
+        struct ChildInfo {
+            HWND  hwnd;
+            RECT  rect;
+            std::wstring className;
+        };
+        std::vector<ChildInfo> children;
+        HWND hChild = ::GetWindow(hTaskbar_, GW_CHILD);
+        while (hChild) {
+            if (::IsWindowVisible(hChild)) {
+                ChildInfo ci{};
+                ci.hwnd = hChild;
+                ::GetWindowRect(hChild, &ci.rect);
+                wchar_t name[256] = {};
+                ::GetClassNameW(hChild, name, 256);
+                ci.className = name;
+                children.push_back(ci);
+            }
+            hChild = ::GetWindow(hChild, GW_HWNDNEXT);
+        }
+        for (const auto& ci : children) {
+            if (ci.className == L"MSTaskListWClass") {
+                taskListRect = ci.rect;
+                foundTaskList = true;
+            }
+            if (ci.className == L"Windows.UI.Composition.DesktopWindowContentBridge") {
+                int cw = ci.rect.right - ci.rect.left;
+                if (cw < tbWidth - 10) {
+                    taskListRect = ci.rect;
+                    foundTaskList = true;
+                }
+            }
+            if (ci.className == L"TrayNotifyWnd") {
+                trayRect = ci.rect;
+                foundTray = true;
+            }
+            if (ci.className == L"ReBarWindow32") {
+                rebarRect = ci.rect;
+                foundRebar = true;
+            }
+        }
     }
 
-    // ── 帧锁定：动画期间拒绝使用中间态矩形 ──
-    // 两次采样间隔 2ms，若差异 > 5px 说明任务栏正在滑入/滑出动画中
-    // 直接回退到上次稳定值，避免歌词跳动到动画中间位置
-    // 注意：冻结模式下跳过（s_frozenTaskbarRect_ 已是稳定值）
-    if (!useFrozen && taskbarAutoHide_) {
+    // ── 帧锁定（扩展）：双采样检测任务栏本体 + 任务列表子窗口的稳定性 ──
+    // Win11 Start Menu 不触发 EVENT_SYSTEM_MENUPOPUPSTART（独立进程），
+    // 但 Win 键按下时 MSTaskListWClass / DesktopWindowContentBridge 子窗口
+    // 会短暂偏移（right +N px），而 Shell_TrayWnd 本体不变。
+    // 父窗口稳定性检测对此无感知 → 需同步检测子窗口。
+    {
         RECT tbCheck{};
         ::Sleep(2);
         ::GetWindowRect(hTaskbar_, &tbCheck);
-        const int delta = (info_.position == TaskbarPosition::LEFT ||
-                           info_.position == TaskbarPosition::RIGHT)
-                              ? abs((tbRect.right - tbRect.left) - (tbCheck.right - tbCheck.left))
-                              : abs(tbRect.bottom - tbCheck.bottom);
-        if (delta > 5) {
-            // 动画中 → 使用上次稳定矩形
+
+        // 复检任务列表子窗口，检测其是否在 2ms 内发生偏移
+        RECT taskListCheck{};
+        bool taskListCheckValid = false;
+        if (foundTaskList && uia_) {
+            // 使用 UIA 重新获取任务列表子窗口矩形（替代 GetWindow + GetWindowRect）
+            IUIAutomationElement* tbElem = nullptr;
+            if (SUCCEEDED(uia_->ElementFromHandle(hTaskbar_, &tbElem)) && tbElem) {
+                IUIAutomationCondition* cond = nullptr;
+                VARIANT var;
+                VariantInit(&var);
+                var.vt = VT_BSTR;
+
+                // 第一轮：查找 MSTaskListWClass
+                var.bstrVal = ::SysAllocString(L"MSTaskListWClass");
+                if (SUCCEEDED(uia_->CreatePropertyCondition(
+                        UIA_ClassNamePropertyId, var, &cond)) && cond) {
+                    ::VariantClear(&var);
+                    IUIAutomationElementArray* arr = nullptr;
+                    if (SUCCEEDED(tbElem->FindAll(TreeScope_Children, cond, &arr)) && arr) {
+                        int len = 0;
+                        arr->get_Length(&len);
+                        if (len > 0) {
+                            IUIAutomationElement* match = nullptr;
+                            arr->GetElement(0, &match);
+                            if (match) {
+                                match->get_CurrentBoundingRectangle(&taskListCheck);
+                                taskListCheckValid = true;
+                                match->Release();
+                            }
+                        }
+                        arr->Release();
+                    }
+                    cond->Release();
+                } else {
+                    ::VariantClear(&var);
+                }
+
+                // 第二轮：如果未命中，尝试 DesktopWindowContentBridge
+                if (!taskListCheckValid) {
+                    var.vt = VT_BSTR;
+                    var.bstrVal = ::SysAllocString(
+                        L"Windows.UI.Composition.DesktopWindowContentBridge");
+                    if (SUCCEEDED(uia_->CreatePropertyCondition(
+                            UIA_ClassNamePropertyId, var, &cond)) && cond) {
+                        ::VariantClear(&var);
+                        IUIAutomationElementArray* arr = nullptr;
+                        if (SUCCEEDED(tbElem->FindAll(TreeScope_Children, cond, &arr)) && arr) {
+                            int len = 0;
+                            arr->get_Length(&len);
+                            for (int j = 0; j < len && !taskListCheckValid; j++) {
+                                IUIAutomationElement* match = nullptr;
+                                arr->GetElement(j, &match);
+                                if (match) {
+                                    RECT cr{};
+                                    match->get_CurrentBoundingRectangle(&cr);
+                                    if ((cr.right - cr.left) < tbWidth - 10) {
+                                        taskListCheck = cr;
+                                        taskListCheckValid = true;
+                                    }
+                                    match->Release();
+                                }
+                            }
+                            arr->Release();
+                        }
+                        cond->Release();
+                    } else {
+                        ::VariantClear(&var);
+                    }
+                }
+                tbElem->Release();
+            }
+        }
+        // 降级：UIA 不可用时回退到传统 GetWindow 方式
+        if (!taskListCheckValid && foundTaskList) {
+            HWND hChild2 = ::GetWindow(hTaskbar_, GW_CHILD);
+            while (hChild2) {
+                if (::IsWindowVisible(hChild2)) {
+                    wchar_t cname[256] = {};
+                    ::GetClassNameW(hChild2, cname, 255);
+                    bool match = (wcscmp(cname, L"MSTaskListWClass") == 0);
+                    if (!match && wcscmp(cname,
+                            L"Windows.UI.Composition.DesktopWindowContentBridge") == 0) {
+                        RECT cr{};
+                        ::GetWindowRect(hChild2, &cr);
+                        if ((cr.right - cr.left) < tbWidth - 10) match = true;
+                    }
+                    if (match) {
+                        ::GetWindowRect(hChild2, &taskListCheck);
+                        taskListCheckValid = true;
+                        break;
+                    }
+                }
+                hChild2 = ::GetWindow(hChild2, GW_HWNDNEXT);
+            }
+        }
+
+        const int deltaW = abs((tbRect.right - tbRect.left) -
+                               (tbCheck.right - tbCheck.left));
+        const int deltaH = abs((tbRect.bottom - tbRect.top) -
+                               (tbCheck.bottom - tbCheck.top));
+        const int deltaTaskList = taskListCheckValid
+            ? abs(taskListRect.right - taskListCheck.right) : 0;
+
+        if (deltaW > 5 || deltaH > 5 || deltaTaskList > 3) {
+            // 动画中 / Explorer 临时修改 → 回退到上次稳定值
             if (stableTaskbarRect_.right != 0) {
+                wchar_t dbg[160];
+                swprintf_s(dbg,
+                    L"[TaskbarLyrics] Instability: dW=%d dH=%d dTaskList=%d"
+                    L" → fallback stable tbRect=(%d,%d,%d,%d)\n",
+                    deltaW, deltaH, deltaTaskList,
+                    stableTaskbarRect_.left, stableTaskbarRect_.top,
+                    stableTaskbarRect_.right, stableTaskbarRect_.bottom);
+                ::OutputDebugStringW(dbg);
                 tbRect = stableTaskbarRect_;
+            }
+            if (stableTaskListValid_ && foundTaskList) {
+                taskListRect = stableTaskListRect_;
             }
         } else {
             // 稳定 → 更新缓存
             stableTaskbarRect_ = tbRect;
+            if (taskListCheckValid) {
+                stableTaskListRect_ = taskListRect;
+                stableTaskListValid_ = true;
+            }
         }
-    } else {
-        stableTaskbarRect_ = tbRect;
-    }
-
-    lastTaskbarRect_ = tbRect;
-    const int tbWidth  = tbRect.right  - tbRect.left;
-    const int tbHeight = tbRect.bottom - tbRect.top;
-
-    // 枚举任务栏子窗口，找到空闲区域
-    // 冻结模式下跳过：子窗口状态不可靠
-    struct ChildInfo {
-        HWND  hwnd;
-        RECT  rect;   // 屏幕坐标
-        std::wstring className;
-    };
-    std::vector<ChildInfo> children;
-
-    HWND hChild = ::GetWindow(hTaskbar_, GW_CHILD);
-    while (hChild) {
-        if (::IsWindowVisible(hChild)) {
-            ChildInfo ci{};
-            ci.hwnd = hChild;
-            ::GetWindowRect(hChild, &ci.rect);
-            wchar_t name[256] = {};
-            ::GetClassNameW(hChild, name, 256);
-            ci.className = name;
-            children.push_back(ci);
-        }
-        hChild = ::GetWindow(hChild, GW_HWNDNEXT);
     }
 
     // 歌词区尺寸（根据显示模式选择不同的高度）
@@ -311,52 +551,18 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         info_.dpi, 96);
     int w = 0, h = lyricH, x = 0, y = 0;
 
-    // 找到关键子窗口的位置 (屏幕坐标)
-    RECT taskListRect = {};
-    bool foundTaskList = false;
-    RECT trayRect = {};
-    bool foundTray = false;
-    RECT rebarRect = {};
-    bool foundRebar = false;
-
-    for (const auto& ci : children) {
-        if (ci.className == L"MSTaskListWClass") {
-            taskListRect = ci.rect;
-            foundTaskList = true;
-        }
-        if (ci.className == L"Windows.UI.Composition.DesktopWindowContentBridge") {
-            // Win11: 占满全屏则忽略
-            int cw = ci.rect.right - ci.rect.left;
-            if (cw < tbWidth - 10) {
-                taskListRect = ci.rect;
-                foundTaskList = true;
-            }
-        }
-        if (ci.className == L"TrayNotifyWnd") {
-            trayRect = ci.rect;
-            foundTray = true;
-        }
-        if (ci.className == L"ReBarWindow32") {
-            rebarRect = ci.rect;
-            foundRebar = true;
-        }
-    }
-
     switch (info_.position) {
     case TaskbarPosition::BOTTOM: {
         // 底部任务栏: 歌词定位在右侧（紧靠托盘左侧），不覆盖最小化窗口区域
         int rightEdge = tbRect.right;
 
-        // 冻结模式：用缓存偏移；正常模式：实时检测托盘位置
-        if (useFrozen) {
-            rightEdge -= cachedRightEdgeOffset_;
-        } else if (foundTray) {
+        if (foundTray) {
             rightEdge = trayRect.left;
         }
 
         // ── 缓存托盘偏移，动画期间复用稳定值 ──
         const int offsetFromRight = tbRect.right - rightEdge;
-        const bool isAnimating = !useFrozen && taskbarAutoHide_ && (
+        const bool isAnimating = taskbarAutoHide_ && (
             abs(tbRect.bottom - stableTaskbarRect_.bottom) > 5 ||
             abs(tbRect.top - stableTaskbarRect_.top) > 5);
         if (!isAnimating && foundTray) {
@@ -464,9 +670,11 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
     // 调试日志：输出最终定位坐标
     {
         wchar_t dbg[256];
-        swprintf_s(dbg, L"[TaskbarLyrics] Pos: pos=%d x=%d y=%d w=%d h=%d tbRect=(%d,%d,%d,%d)\n",
+        swprintf_s(dbg, L"[TaskbarLyrics] Pos: pos=%d x=%d y=%d w=%d h=%d "
+                   L"tbRect=(%d,%d,%d,%d) dragOffX=%d\n",
                    static_cast<int>(info_.position), x, y, w, h,
-                   tbRect.left, tbRect.top, tbRect.right, tbRect.bottom);
+                   tbRect.left, tbRect.top, tbRect.right, tbRect.bottom,
+                   dragOffsetX_);
         ::OutputDebugStringW(dbg);
     }
 
@@ -480,10 +688,30 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
 void TaskbarWindow::CheckResize() {
     if (!hTaskbar_) return;
 
+    // Start Menu 激活期间跳过帧级重检测：冻结模式下已使用稳定快照定位，
+    // 无需在此轮询 GetWindowRect 规避 Explorer 临时脏写。
+    // 同时防止 MENUPOPUPSTART 尚未设置锁时 CheckResize 抢先触发未保护的 PositionLyricsInTaskbar。
+    if (s_shellInteractionLocked_) return;
+
     RECT tb{};
     ::GetWindowRect(hTaskbar_, &tb);
     if (!::EqualRect(&tb, &lastTaskbarRect_)) {
-        PositionLyricsInTaskbar();
+        wchar_t dbg[160];
+        swprintf_s(dbg, L"[TaskbarLyrics] CheckResize: rect changed "
+                   L"old=(%d,%d,%d,%d) new=(%d,%d,%d,%d) → posting WM_DELAYED_REPOSITION\n",
+                   lastTaskbarRect_.left, lastTaskbarRect_.top,
+                   lastTaskbarRect_.right, lastTaskbarRect_.bottom,
+                   tb.left, tb.top, tb.right, tb.bottom);
+        ::OutputDebugStringW(dbg);
+
+        // 使用 PostMessage 延迟定位：WinEvent out-of-context 钩子事件通过消息队列分发，
+        // PostMessage 将 WM_DELAYED_REPOSITION 放入队列末尾，保证在此之前任何已排队的
+        // MENUPOPUPSTART 事件优先处理并设置 s_shellInteractionLocked_ 锁。
+        // 彻底消除 CheckResize() 在 MENUPOPUPSTART 之前抢先调用 PositionLyricsInTaskbar()
+        // 导致 s_lastGoodTaskbarRect_ 被 Explorer 脏写污染的竞态窗口。
+        if (hwnd_) {
+            ::PostMessageW(hwnd_, WM_DELAYED_REPOSITION, 0, 0);
+        }
     } else if (taskbarAutoHide_) {
         // 自动隐藏模式：即使矩形未变，任务栏可能已滑出/滑入（高度变化）
         // 重新检测以响应状态变更
@@ -757,6 +985,104 @@ void TaskbarWindow::SnapToEmptySpace() {
                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// ═════════════════════════════════════════
+// UI Automation: 子窗口几何信息获取
+// ═════════════════════════════════════════
+
+void TaskbarWindow::InitUIAutomation() {
+    // COM 应在 WinMain 中已初始化（ole32 已链接），此处仅创建 IUIAutomation 实例
+    HRESULT hr = CoCreateInstance(
+        __uuidof(CUIAutomation), nullptr,
+        CLSCTX_INPROC_SERVER,
+        __uuidof(IUIAutomation),
+        reinterpret_cast<void**>(&uia_));
+    if (FAILED(hr)) {
+        ::OutputDebugStringW(L"[TaskbarLyrics] InitUIAutomation FAILED\n");
+        uia_ = nullptr;
+    }
+}
+
+void TaskbarWindow::CleanupUIAutomation() {
+    if (uia_) {
+        uia_->Release();
+        uia_ = nullptr;
+    }
+}
+
+bool TaskbarWindow::GetChildRectsByUIA(RECT& taskListRect, bool& foundTaskList,
+                                        RECT& trayRect,    bool& foundTray,
+                                        RECT& rebarRect,   bool& foundRebar,
+                                        int   tbWidth) {
+    foundTaskList = false;
+    foundTray = false;
+    foundRebar = false;
+
+    if (!uia_ || !hTaskbar_) return false;
+
+    // 获取 Shell_TrayWnd 对应的 UIA 元素
+    IUIAutomationElement* taskbarElement = nullptr;
+    HRESULT hr = uia_->ElementFromHandle(hTaskbar_, &taskbarElement);
+    if (FAILED(hr) || !taskbarElement) return false;
+
+    // 获取所有直接子元素（TreeScope_Children）
+    IUIAutomationCondition* trueCondition = nullptr;
+    uia_->CreateTrueCondition(&trueCondition);
+    if (!trueCondition) {
+        taskbarElement->Release();
+        return false;
+    }
+
+    IUIAutomationElementArray* children = nullptr;
+    hr = taskbarElement->FindAll(TreeScope_Children, trueCondition, &children);
+    trueCondition->Release();
+    taskbarElement->Release();
+
+    if (FAILED(hr) || !children) return false;
+
+    int count = 0;
+    children->get_Length(&count);
+
+    for (int i = 0; i < count; i++) {
+        IUIAutomationElement* child = nullptr;
+        children->GetElement(i, &child);
+        if (!child) continue;
+
+        // 获取类名
+        BSTR className = nullptr;
+        child->get_CurrentClassName(&className);
+
+        // 获取边界矩形（屏幕坐标，等同于 GetWindowRect）
+        RECT rc{};
+        child->get_CurrentBoundingRectangle(&rc);
+
+        if (className) {
+            if (wcscmp(className, L"MSTaskListWClass") == 0) {
+                taskListRect = rc;
+                foundTaskList = true;
+            } else if (wcscmp(className,
+                       L"Windows.UI.Composition.DesktopWindowContentBridge") == 0) {
+                // Win11: 占满全屏的 Bridge 忽略（通常是 Start Menu 背景层）
+                int cw = rc.right - rc.left;
+                if (cw < tbWidth - 10) {
+                    taskListRect = rc;
+                    foundTaskList = true;
+                }
+            } else if (wcscmp(className, L"TrayNotifyWnd") == 0) {
+                trayRect = rc;
+                foundTray = true;
+            } else if (wcscmp(className, L"ReBarWindow32") == 0) {
+                rebarRect = rc;
+                foundRebar = true;
+            }
+            ::SysFreeString(className);
+        }
+        child->Release();
+    }
+
+    children->Release();
+    return true;
+}
+
 LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     TaskbarWindow* self = nullptr;
     if (msg == WM_NCCREATE) {
@@ -904,10 +1230,16 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_SETTINGCHANGE: {
         // SPI_SETWORKAREA: 分辨率/缩放/多显示器/自动隐藏任务栏/Start Menu 弹出时发送
-        // 先交给 DefWindowProc 让系统处理工作区变化，再立即重新定位覆盖系统调整
+        // 先交给 DefWindowProc 让系统处理工作区变化。
+        // 使用 PostMessage 延迟定位：WinEvent out-of-context 钩子事件（如
+        // MENUPOPUPSTART）通过消息队列分发，PostMessage 将重定位放入队列末尾，
+        // 确保 MENUPOPUPSTART 优先设置 s_shellInteractionLocked_ 锁后再执行定位，
+        // 消除 Start Menu 弹出时直接调用 PositionLyricsInTaskbar() 的竞态窗口。
         if (wParam == SPI_SETWORKAREA || wParam == SPI_SETNONCLIENTMETRICS) {
             ::DefWindowProcW(hwnd, msg, wParam, lParam);
-            if (self) self->PositionLyricsInTaskbar();
+            if (self && hwnd) {
+                ::PostMessageW(hwnd, WM_DELAYED_REPOSITION, 0, 0);
+            }
         }
         return 0;
     }
@@ -930,6 +1262,13 @@ LRESULT CALLBACK TaskbarWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         } else if (wParam == 3) {
             // Start Menu 关闭 300ms 后解锁，Explorer Rect 已恢复
             ::KillTimer(hwnd, 3);
+            ::OutputDebugStringW(L"[TaskbarLyrics] Timer3: unlocking s_shellInteractionLocked_\n");
+            TaskbarWindow::s_shellInteractionLocked_ = false;
+            if (self) self->PositionLyricsInTaskbar();
+        } else if (wParam == 4) {
+            // Win11 Start Menu 关闭 300ms 后解锁（ForegroundHook 触发）
+            ::KillTimer(hwnd, 4);
+            ::OutputDebugStringW(L"[TaskbarLyrics] Timer4: unlock (ForegroundHook)\n");
             TaskbarWindow::s_shellInteractionLocked_ = false;
             if (self) self->PositionLyricsInTaskbar();
         }
