@@ -14,6 +14,7 @@
 #include "native_messaging.h"
 #include "process_monitor.h"
 #include "renderer.h"
+#include "spectrum_capture.h"
 #include "taskbar_window.h"
 #include "tray_icon.h"
 #include "websocket_client.h"
@@ -47,6 +48,7 @@ struct AppContext {
     std::unique_ptr<moekoe::ProcessMonitor>       processMonitor;
     std::unique_ptr<moekoe::WebSocketClient>      wsClient;
     std::unique_ptr<moekoe::LyricsParser>         parser;
+    std::unique_ptr<moekoe::SpectrumCapture>      spectrumCapture;
     std::unique_ptr<moekoe::TaskbarRenderer>      renderer;        // 依赖 taskbarWindow 的 HWND
     std::unique_ptr<moekoe::TaskbarWindow>         taskbarWindow;   // 依赖 renderer
     std::unique_ptr<moekoe::TrayIcon>             tray;
@@ -522,6 +524,11 @@ LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (app->parser && app->renderer) {
                 auto state = app->parser->GetCurrentRenderState();
 
+                // 3.1 集成频谱数据（纯音乐播放时使用）
+                if (app->spectrumCapture && app->spectrumCapture->IsRunning()) {
+                    state.spectrumBands = app->spectrumCapture->GetSpectrum(SPECTRUM_NUM_BANDS);
+                }
+
                 // 3. 附加 UI 状态（悬停/拖动，用于判断是否显示控制按钮）
                 if (app->taskbarWindow) {
                     state.isHovering = app->taskbarWindow->IsHovering();
@@ -737,6 +744,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     // 10) 启动 WebSocket 客户端 + 歌词解析
     app.parser = std::make_unique<moekoe::LyricsParser>();
     auto& parser = *app.parser;
+
+    // 10.1) 启动频谱捕获（WASAPI loopback，始终运行，开销极低）
+    app.spectrumCapture = std::make_unique<moekoe::SpectrumCapture>();
+    app.spectrumCapture->Start();
 
     app.wsClient = std::make_unique<moekoe::WebSocketClient>();
     auto& wsClient = *app.wsClient;
@@ -976,6 +987,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     config.Save();
 
     ::KillTimer(hMsgWnd, 1);
+    if (app.spectrumCapture) {
+        app.spectrumCapture->Stop();
+    }
     httpServer.Stop();
     wsClient.Disconnect();
     renderer.Shutdown();

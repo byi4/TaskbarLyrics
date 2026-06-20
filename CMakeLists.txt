@@ -245,6 +245,7 @@ set(SOURCES
     src/taskbar_geometry.cpp
     src/fullscreen_detector.cpp
     src/renderer.cpp
+    src/spectrum_capture.cpp
     src/config.cpp
     src/tray_icon.cpp
     src/process_monitor.cpp

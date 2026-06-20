@@ -70,6 +70,9 @@ struct RenderState {
     std::string nextLine;             // 下一行歌词文本（预览）
     std::string coverArtUrl;          // 专辑封面 URL（可能为空）
     std::string songName;             // 歌曲名称（用于封面降级显示）
+
+    // 频谱数据（纯音乐时使用，由 SpectrumCapture::GetSpectrum() 填充）
+    std::vector<float> spectrumBands;
 };
 
 } // namespace moekoe

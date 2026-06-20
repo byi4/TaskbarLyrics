@@ -103,6 +103,25 @@ RenderState LyricsParser::GetCurrentRenderState() const {
     }
     out.hasLyrics = true;
 
+    // 检测纯音乐标记：若所有非空歌词行均为纯音乐占位文本，
+    // 则视为无歌词，交由上层渲染频谱而非文字。
+    {
+        bool allInstrumental = true;
+        for (const auto& line : lyrics_.lines) {
+            if (line.text.empty()) continue;
+            if (line.text.find("纯音乐") == std::string::npos &&
+                line.text.find("Instrumental") == std::string::npos &&
+                line.text.find("instrumental") == std::string::npos) {
+                allInstrumental = false;
+                break;
+            }
+        }
+        if (allInstrumental) {
+            out.hasLyrics = false;
+            return out;
+        }
+    }
+
     const int idx = FindLineIndex(effectiveTime);
     if (idx < 0) {
         // 进度在第一行之前 → 兜底：返回第一行（独立模式 currentTime=0 时触发）

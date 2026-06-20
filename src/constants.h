@@ -210,4 +210,20 @@ constexpr size_t MAX_CHARS_PER_LINE = 1000;
 /// 超时后使用 TerminateThread 强制终止，避免程序退出卡死
 constexpr int THREAD_JOIN_TIMEOUT_MS = 2000;
 
+// ═══════════════════════════════════════
+// 频谱渲染常量
+// ═══════════════════════════════════════
+
+/// 频谱频段数
+constexpr int SPECTRUM_NUM_BANDS = 32;
+
+/// 卡片模式频谱高度（96 DPI）
+constexpr float SPECTRUM_CARD_HEIGHT_DP = 12.0f;
+
+/// 频谱条间距（像素）
+constexpr float SPECTRUM_BAR_GAP = 1.0f;
+
+/// 频谱条最小高度（像素）
+constexpr float SPECTRUM_BAR_MIN_HEIGHT = 2.0f;
+
 } // namespace moekoe::constants

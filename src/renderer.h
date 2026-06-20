@@ -118,6 +118,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> highlightBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> normalBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> translationBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> spectrumBrush_;
 
     RenderState lastState_;
 
@@ -149,6 +150,12 @@ private:
     std::string cachedCoverUrl_;
     std::atomic<std::vector<uint8_t>*> pendingCoverData_{nullptr};  // 后台线程 new，原子 swap 给渲染线程。渲染线程 delete 后置 nullptr
     std::atomic<bool> coverLoadInProgress_{false};
+    std::atomic<int> coverDownloadGen_{0};  // 代际计数器：URL 变化时递增，下载线程完成后比对以丢弃过期结果
+
+    // 封面裁剪 Layer 缓存（避免每帧 CreateLayer 导致 D2D 资源耗尽）
+    Microsoft::WRL::ComPtr<ID2D1Layer>                    coverLayer_;
+    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> coverClipGeo_;
+    float                                                 cachedCoverSize_{-1.0f};
 
     // 卡片模式专用颜色画刷
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardCurrentBrush_;
@@ -198,6 +205,9 @@ private:
 
     /// ease-out back（带有轻微回弹，用于入场）
     static float EaseOutBack(float t);
+
+    // 频谱渲染
+    void DrawSpectrumBars(const std::vector<float>& bands, float x, float width, float y, float height, float alpha = 1.0f);
 };
 
 } // namespace moekoe

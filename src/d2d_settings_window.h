@@ -122,6 +122,7 @@ private:
     };
 
     void BuildControls(const Config& cfg);
+    void UpdateControlVisibility();  // 根据 displayMode 动态显示/隐藏控件
     void LayoutControls(int contentWidth);
     Control* HitTest(int x, int y);
     void DrawAll();

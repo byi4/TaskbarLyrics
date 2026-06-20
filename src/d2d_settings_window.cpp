@@ -456,6 +456,71 @@ void D2DSettingsWindow::BuildControls(const Config& cfg) {
         c.buttonText = "取消";
         controls_.push_back(c);
     }
+
+    // 初始可见性：根据当前 displayMode 过滤不相关控件
+    UpdateControlVisibility();
+}
+
+void D2DSettingsWindow::UpdateControlVisibility() {
+    // 根据当前 displayMode 动态显示/隐藏对应模式的专属控件组。
+    // 控件分三类：
+    //   1) ID 列表匹配（karaokeOnly / cardOnly）：遍历控件按 ID 精确匹配
+    //   2) SectionHeader 匹配（"长歌词滚动" / "卡片样式设置"）：通过标签关键词检测
+    //   3) 其余控件（位置/高级/通用/按钮）：保持默认 visible=true
+    //
+    // 调用时机：BuildControls 末尾（初始化）、displayMode dropdown 切换时（OnMouseDown）。
+    bool isCard = false;
+    for (const auto& c : controls_) {
+        if (c.id == "displayMode") {
+            isCard = (c.dropdownSelected == 1);
+            break;
+        }
+    }
+
+    // ID 白名单：不在列表中的控件不受影响（保持默认 visible=true）
+    static const std::vector<std::string> karaokeOnly = {
+        "fontSize", "fontFamily", "normalColor", "highlightColor",
+        "opacity", "karaoke", "translation", "themePresets",
+        "marquee", "marqueeMode", "marqueeDelay", "marqueePause", "marqueeSpeed"
+    };
+    static const std::vector<std::string> cardOnly = {
+        "cardFontSizeCurrent", "cardFontSizeNext", "cardCurrentColor", "cardNextColor"
+    };
+
+    // 跟踪「长歌词滚动（跑马灯）」和「卡片样式设置」两个 section 的范围。
+    // 这两个 SectionHeader 本身也需要按模式显示/隐藏，但其 ID 为空，无法用 ID 列表匹配，
+    // 故通过标签关键词 + 状态机方式处理：每次遇到 SectionHeader 时更新标志。
+    bool inKaraokeSection = false;
+    bool inCardSection = false;
+
+    for (auto& c : controls_) {
+        // 更新 section 状态标志（每个 SectionHeader 都会重置标志为精确值）
+        if (c.type == CtrlType::SectionHeader) {
+            inKaraokeSection = (c.label.find("跑马灯") != std::string::npos);
+            inCardSection = (c.label.find("卡片样式") != std::string::npos);
+        }
+
+        if (c.type == CtrlType::SectionHeader) {
+            if (inKaraokeSection) {
+                c.visible = !isCard;       // 卡拉OK模式可见，卡片模式隐藏
+                continue;
+            }
+            if (inCardSection) {
+                c.visible = isCard;        // 卡片模式可见，卡拉OK模式隐藏
+                continue;
+            }
+            // 外观 / 位置 / 高级 / 通用 — 双模式均可见
+            continue;
+        }
+
+        // ID 匹配：仅修改命中控件的 visible，其余控件原样保留
+        for (const auto& id : karaokeOnly) {
+            if (c.id == id) { c.visible = !isCard; break; }
+        }
+        for (const auto& id : cardOnly) {
+            if (c.id == id) { c.visible = isCard; break; }
+        }
+    }
 }
 
 void D2DSettingsWindow::LayoutControls(int contentWidth) {
@@ -470,6 +535,8 @@ void D2DSettingsWindow::LayoutControls(int contentWidth) {
     int y = kTitleBarHeight + 8; // 标题栏下方开始
 
     for (auto& c : controls_) {
+        if (!c.visible) continue;  // 不可见控件不占布局空间，避免页面出现空白间隙
+
         switch (c.type) {
         case CtrlType::SectionHeader:
             c.rect = {leftPad, y, controlRight, y + 24};
@@ -1152,6 +1219,12 @@ void D2DSettingsWindow::OnMouseDown(int x, int y) {
         // 循环选择
         hit->dropdownSelected = (hit->dropdownSelected + 1) %
                                static_cast<int>(hit->dropdownItems.size());
+        // 显示模式切换时，重新过滤可见控件并重排布局
+        // UpdateControlVisibility 更新各控件 visible 标志，LayoutControls 基于新标志重新计算 rect + 总高度
+        if (hit->id == "displayMode") {
+            UpdateControlVisibility();
+            LayoutControls(contentWidth_);
+        }
         break;
 
     case CtrlType::ButtonRow:

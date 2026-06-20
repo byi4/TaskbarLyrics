@@ -81,6 +81,30 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
 
     CreateRenderTarget();
 
+    // 创建画刷（与 Resize 中逻辑一致）
+    if (renderTarget_) {
+        highlightBrush_.Reset();
+        normalBrush_.Reset();
+        translationBrush_.Reset();
+        spectrumBrush_.Reset();
+        cardCurrentBrush_.Reset();
+        cardNextBrush_.Reset();
+        const D2D1_COLOR_F hi = ParseColor(settings_.highlightColor, 1.0f);
+        const D2D1_COLOR_F no = ParseColor(settings_.normalColor, static_cast<float>(settings_.normalOpacity));
+        renderTarget_->CreateSolidColorBrush(hi, highlightBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(no, normalBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.7f, 0.7f, 0.7f, 0.8f),
+            translationBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(ParseColor(settings_.highlightColor), spectrumBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardCurrentColor, 1.0f),
+            cardCurrentBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(
+            ParseColor(settings_.cardNextColor, 1.0f),
+            cardNextBrush_.GetAddressOf());
+    }
+
     const std::wstring family = Utf8ToWide(settings_.fontFamily);
     if (dwriteFactory_ && !family.empty()) {
         dwriteFactory_->CreateTextFormat(
@@ -159,6 +183,8 @@ bool TaskbarRenderer::Initialize(HWND hwnd) {
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.7f, 0.7f, 0.7f, 0.8f),
             translationBrush_.GetAddressOf());
+        // 频谱画刷（使用高亮色）
+        renderTarget_->CreateSolidColorBrush(ParseColor(settings_.highlightColor), spectrumBrush_.GetAddressOf());
         // 卡片模式专用颜色画刷
         renderTarget_->CreateSolidColorBrush(
             ParseColor(settings_.cardCurrentColor, 1.0f),
@@ -177,6 +203,10 @@ void TaskbarRenderer::CreateRenderTarget() {
 
     wicBitmap_.Reset();
     renderTarget_.Reset();
+    // 依赖旧 renderTarget 的 Layer/Geometry 一并失效
+    coverLayer_.Reset();
+    coverClipGeo_.Reset();
+    cachedCoverSize_ = -1.0f;
 
     HRESULT hr = wicFactory_->CreateBitmap(
         std::max<UINT>(1, width_), std::max<UINT>(1, height_),
@@ -217,12 +247,18 @@ void TaskbarRenderer::Shutdown() {
     cardCurrentBrush_.Reset();
     d2dCoverBitmap_.Reset();
     cachedCoverUrl_.clear();       // 清除 URL 缓存，避免重建后误判无需下载
+    coverLoadInProgress_.store(false, std::memory_order_release);
+    coverDownloadGen_.store(0, std::memory_order_release);  // 重置代际计数器
     delete pendingCoverData_.exchange(nullptr);     // 清除待消费的内存数据
+    coverLayer_.Reset();
+    coverClipGeo_.Reset();
+    cachedCoverSize_ = -1.0f;
     cardNextFormat_.Reset();
     cardCurrentFormat_.Reset();
     translationBrush_.Reset();
     highlightBrush_.Reset();
     normalBrush_.Reset();
+    spectrumBrush_.Reset();
     translationFormat_.Reset();
     textFormat_.Reset();
     renderTarget_.Reset();
@@ -243,6 +279,7 @@ void TaskbarRenderer::Resize(UINT width, UINT height, UINT dpi) {
         highlightBrush_.Reset();
         normalBrush_.Reset();
         translationBrush_.Reset();
+        spectrumBrush_.Reset();
         cardCurrentBrush_.Reset();
         cardNextBrush_.Reset();
         const D2D1_COLOR_F hi = ParseColor(settings_.highlightColor, 1.0f);
@@ -252,6 +289,7 @@ void TaskbarRenderer::Resize(UINT width, UINT height, UINT dpi) {
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.7f, 0.7f, 0.7f, 0.8f),
             translationBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(ParseColor(settings_.highlightColor), spectrumBrush_.GetAddressOf());
         renderTarget_->CreateSolidColorBrush(
             ParseColor(settings_.cardCurrentColor, 1.0f),
             cardCurrentBrush_.GetAddressOf());
@@ -660,16 +698,18 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
     const float radius = constants::CARD_COVER_RADIUS_DP * dpiScale;
 
     // ═════ 异步下载封面图到内存（无磁盘 I/O） ═════
-    // URL 变更时启动后台线程下载到 std::vector<uint8_t>，通过 atomic swap 交给渲染线程
-    if (!url.empty() && url != cachedCoverUrl_ &&
-        !coverLoadInProgress_.load(std::memory_order_relaxed)) {
+    // URL 变更时启动后台线程下载到 std::vector<uint8_t>，通过 atomic swap 交给渲染线程。
+    // 使用代际计数器 coverDownloadGen_ 解决切歌时旧下载未完成导致新封面被跳过的竞态：
+    // URL 变化时 gen++，下载线程完成后比对 gen——不匹配则丢弃过期结果。
+    if (!url.empty() && url != cachedCoverUrl_) {
         cachedCoverUrl_ = url;
-        coverLoadInProgress_.store(true, std::memory_order_relaxed);
-        d2dCoverBitmap_.Reset();       // 清除旧位图，避免显示过期封面
+        d2dCoverBitmap_.Reset();       // 立即清除旧位图，切歌瞬间显示兜底符号
         delete pendingCoverData_.exchange(nullptr);     // 清除旧的待消费数据
+        coverLoadInProgress_.store(true, std::memory_order_relaxed);
 
+        int gen = ++coverDownloadGen_;  // 递增代际，使可能还在跑的旧下载失效
         std::string targetUrl = url;
-        std::thread([this, targetUrl]() {
+        std::thread([this, targetUrl, gen]() {
             // 下载到临时文件，然后读入内存立即删除（避免磁盘持久化）
             wchar_t tempPath[MAX_PATH] = {0};
             ::GetTempPathW(MAX_PATH, tempPath);
@@ -678,6 +718,15 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
 
             std::wstring wUrl(targetUrl.begin(), targetUrl.end());
             HRESULT hr = ::URLDownloadToFileW(nullptr, wUrl.c_str(), tempFile, 0, nullptr);
+
+            // 代际校验：若期间又切歌（gen != coverDownloadGen_），丢弃过期下载结果
+            int curGen = coverDownloadGen_.load(std::memory_order_relaxed);
+            if (gen != curGen) {
+                ::DeleteFileW(tempFile);
+                coverLoadInProgress_.store(false, std::memory_order_release);
+                if (debugLog_) Log("[COVER] Discard stale download (gen=%d, cur=%d)\n", gen, curGen);
+                return;
+            }
 
             if (SUCCEEDED(hr)) {
                 // 读入内存
@@ -821,27 +870,28 @@ void TaskbarRenderer::DrawCoverArt(const std::string& url, const std::string& fa
         float drawY = y + (size - bmpH) / 2.0f;
         D2D1_RECT_F destRect = D2D1::RectF(drawX, drawY, drawX + bmpW, drawY + bmpH);
 
-        // 创建圆角矩形裁剪几何
-        Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> clipGeo;
-        HRESULT geoHr = d2dFactory_->CreateRoundedRectangleGeometry(
-            rr, clipGeo.GetAddressOf());
-        if (SUCCEEDED(geoHr) && clipGeo) {
-            Microsoft::WRL::ComPtr<ID2D1Layer> layer;
+        // 缓存裁剪几何和 Layer，仅在封面尺寸变化时重建
+        // 避免每帧 CreateLayer 造成 D2D 内部资源耗尽（频谱引入后 card 模式每帧重绘）
+        if (!coverClipGeo_ || std::abs(cachedCoverSize_ - size) > 0.5f) {
+            coverClipGeo_.Reset();
+            coverLayer_.Reset();
+            d2dFactory_->CreateRoundedRectangleGeometry(rr, coverClipGeo_.GetAddressOf());
             D2D1_SIZE_F layerSize = D2D1::SizeF(size, size);
-            HRESULT layerHr = renderTarget_->CreateLayer(&layerSize, layer.GetAddressOf());
-            if (SUCCEEDED(layerHr) && layer) {
-                D2D1_LAYER_PARAMETERS layerParams = D2D1::LayerParameters(
-                    D2D1::InfiniteRect(), clipGeo.Get(),
-                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                    D2D1::IdentityMatrix(),
-                    1.0f, nullptr,
-                    D2D1_LAYER_OPTIONS_NONE);
-                renderTarget_->PushLayer(layerParams, layer.Get());
-                renderTarget_->DrawBitmap(
-                    d2dCoverBitmap_.Get(), destRect, 1.0f,
-                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
-                renderTarget_->PopLayer();
-            }
+            renderTarget_->CreateLayer(&layerSize, coverLayer_.GetAddressOf());
+            cachedCoverSize_ = size;
+        }
+        if (coverClipGeo_ && coverLayer_) {
+            D2D1_LAYER_PARAMETERS layerParams = D2D1::LayerParameters(
+                D2D1::InfiniteRect(), coverClipGeo_.Get(),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                D2D1::IdentityMatrix(),
+                1.0f, nullptr,
+                D2D1_LAYER_OPTIONS_NONE);
+            renderTarget_->PushLayer(layerParams, coverLayer_.Get());
+            renderTarget_->DrawBitmap(
+                d2dCoverBitmap_.Get(), destRect, 1.0f,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
+            renderTarget_->PopLayer();
         }
     } else {
         // 无封面：显示灰底圆角矩形 + 音乐符号
@@ -1019,6 +1069,7 @@ void TaskbarRenderer::Render(const RenderState& state) {
                          state.isDragging != lastState_.isDragging ||
                          state.nextLine != lastState_.nextLine ||
                          state.coverArtUrl != lastState_.coverArtUrl ||
+                         state.spectrumBands != lastState_.spectrumBands ||
                          std::abs(state.progress - lastState_.progress) > 0.001);
     // 跑马灯滚动动画期间也需要重绘
     // 卡片模式无跑马灯：无封面图时每帧重绘（确保 fallback 始终可见），
@@ -1059,7 +1110,23 @@ void TaskbarRenderer::Render(const RenderState& state) {
                 RenderCardStyle(state);
             }
         } else if (state.isPlaying) {
-            DrawCentered(L"...", normalBrush_.Get(), 0.0f);
+            // 纯音乐：封面 + 频谱
+            const float dpiScale = static_cast<float>(dpi_) / 96.0f;
+            const float coverSize = static_cast<float>(settings_.cardCoverSize) * dpiScale;
+            const float gap = static_cast<float>(settings_.cardGap) * dpiScale;
+            const float paddingX = constants::TEXT_PADDING_X;
+            std::string fallback = state.songName.empty() ? "?" : state.songName.substr(0, 1);
+            DrawCoverArt(state.coverArtUrl, fallback, paddingX,
+                         (static_cast<float>(height_) - coverSize) / 2.0f, coverSize);
+            if (!state.spectrumBands.empty()) {
+                const float specX = paddingX + coverSize + gap;
+                const float specW = static_cast<float>(width_) - specX - paddingX;
+                if (specW > 10.0f) {
+                    const float specH = constants::SPECTRUM_CARD_HEIGHT_DP * dpiScale;
+                    const float specY = (static_cast<float>(height_) - specH) * 0.5f;
+                    DrawSpectrumBars(state.spectrumBands, specX, specW, specY, specH);
+                }
+            }
         }
     } else {
         // ═════ 卡拉OK渲染路径 ═════
@@ -1080,7 +1147,15 @@ void TaskbarRenderer::Render(const RenderState& state) {
             }
         } else {
             if (state.isPlaying) {
-                DrawCentered(L"...", normalBrush_.Get(), 0.0f);
+                if (!state.spectrumBands.empty()) {
+                    // 全高频谱
+                    DrawSpectrumBars(state.spectrumBands,
+                                     constants::TEXT_PADDING_X,
+                                     static_cast<float>(width_) - 2.0f * constants::TEXT_PADDING_X,
+                                     0.0f, static_cast<float>(height_));
+                } else {
+                    DrawCentered(L"...", normalBrush_.Get(), 0.0f);
+                }
             }
         }
     }
@@ -1359,6 +1434,32 @@ bool TaskbarRenderer::UpdateCardAnim(const std::string& currentLine,
     }
 
     return true;
+}
+
+// ═══════════════════════════════════════════
+// 频谱渲染实现
+// ═══════════════════════════════════════════
+
+void TaskbarRenderer::DrawSpectrumBars(const std::vector<float>& bands, float x, float width, float y, float height, float alpha) {
+    if (bands.empty() || !renderTarget_) return;
+
+    const size_t n = bands.size();
+    const float totalGap = constants::SPECTRUM_BAR_GAP * (static_cast<float>(n) - 1);
+    const float availW = width;
+    const float barWidth = (std::max)(2.0f, (availW - totalGap) / static_cast<float>(n));
+    const float step = barWidth + constants::SPECTRUM_BAR_GAP;
+    const float startX = x;
+
+    for (size_t i = 0; i < n; ++i) {
+        float barH = bands[i] * height;
+        if (barH < constants::SPECTRUM_BAR_MIN_HEIGHT) barH = constants::SPECTRUM_BAR_MIN_HEIGHT;
+        const float barX = startX + static_cast<float>(i) * step;
+        const float barY = y + height - barH;
+
+        D2D1_RECT_F rect = D2D1::RectF(barX, barY, barX + barWidth, barY + barH);
+        spectrumBrush_->SetOpacity(alpha * (0.3f + bands[i] * 0.7f));
+        renderTarget_->FillRectangle(rect, spectrumBrush_.Get());
+    }
 }
 
 } // namespace moekoe
