@@ -165,6 +165,7 @@ private:
     POINT         dragStartWinPos_{0, 0};  // 拖动开始时窗口屏幕坐标
     int           dragOffsetX_{0};         // 用户拖动产生的累积偏移
     int           dragOffsetY_{0};
+    RECT          lastPosRect_{-1, -1, -1, -1};  // 上次 SetWindowPos 的坐标，避免无变化时重复提交 DWM
 
     std::string   displayMode_{"karaoke"};  // 显示模式: "karaoke" | "card"
 

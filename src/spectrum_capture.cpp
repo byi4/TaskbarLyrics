@@ -299,8 +299,8 @@ void SpectrumCapture::Impl::CaptureLoop(SpectrumCapture* parent) {
                 v = (std::min)(1.0f, v * invMax);
             }
 
-            // 指数移动平均平滑
-            constexpr float smoothing = 0.5f;
+            // 指数移动平均平滑（0.35 保留 35% 旧值，响应更快）
+            constexpr float smoothing = 0.35f;
             if (smoothSpectrum.size() != rawBands.size()) {
                 smoothSpectrum = rawBands;
             } else {

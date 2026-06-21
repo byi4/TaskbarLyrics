@@ -603,6 +603,15 @@ void TaskbarWindow::PositionLyricsInTaskbar() {
         ::OutputDebugStringW(dbg);
     }
 
+    // 短路：坐标未变且窗口可见时跳过 SetWindowPos，避免无意义的 DWM Commit。
+    // 窗口不可见时（如从 auto-hide 恢复、全屏恢复后首帧）仍需执行以触发 SWP_SHOWWINDOW。
+    if (lastPosRect_.left == x && lastPosRect_.top == y &&
+        lastPosRect_.right == w && lastPosRect_.bottom == h &&
+        ::IsWindowVisible(hwnd_)) {
+        return;
+    }
+    lastPosRect_ = {x, y, w, h};
+
     // owned window 天然在 owner (任务栏) 之上，用 HWND_TOP 保持此关系
     ::SetWindowPos(
         hwnd_, HWND_TOP,

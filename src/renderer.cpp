@@ -1457,7 +1457,7 @@ void TaskbarRenderer::DrawSpectrumBars(const std::vector<float>& bands, float x,
         const float barY = y + height - barH;
 
         D2D1_RECT_F rect = D2D1::RectF(barX, barY, barX + barWidth, barY + barH);
-        spectrumBrush_->SetOpacity(alpha * (0.3f + bands[i] * 0.7f));
+        spectrumBrush_->SetOpacity(alpha * (0.12f + bands[i] * 0.88f));
         renderTarget_->FillRectangle(rect, spectrumBrush_.Get());
     }
 }

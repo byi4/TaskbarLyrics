@@ -130,9 +130,8 @@ else()
     if(EXISTS "${IXWEBSOCKET_DEBUG_LIB}")
         message(STATUS "Using manually built ixwebsocket Debug: ${IXWEBSOCKET_DEBUG_LIB}")
     else()
-        message(FATAL_ERROR "ixwebsocket Debug library not found. "
-            "Please build the Debug configuration of ixwebsocket or use a Release-only build. "
-            "To override the debug library path, set IXWEBSOCKET_DEBUG_LIB.")
+        message(STATUS "ixwebsocket Debug library not found - using Release for both configurations")
+        set(IXWEBSOCKET_DEBUG_LIB "${IXWEBSOCKET_RELEASE_LIB}")
     endif()
 
     find_path(IXWEBSOCKET_INCLUDE_DIR ixwebsocket/IXWebSocket.h
