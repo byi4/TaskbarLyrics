@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // websocket_client.cpp - WebSocket 客户端实现
 #include "websocket_client.h"
-#include "api_enabler.h"
+
 #include "constants.h"
 #include "logger.h"
 
@@ -345,12 +345,6 @@ void WebSocketClient::ReconnectLoop() {
             try { client_->stop(); } catch (...) {}
             client_.reset();
 
-            // API 自动开启已迁移到 content.js（localStorage），EXE 不再干预
-            // if (attempt == 2) {
-            //     Log("Reconnect: triggering API auto-enable check...");
-            //     auto result = ApiEnabler::TryEnableApi();
-            //     Log("Reconnect: API auto-enable result = " + ApiEnabler::ResultToString(result));
-            // }
         } else {
             Log("Reconnect: connected successfully");
         }
