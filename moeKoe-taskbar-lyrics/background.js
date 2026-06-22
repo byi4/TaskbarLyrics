@@ -2,11 +2,20 @@
 //
 // 职责:
 //   - 通过 WebSocket 连接 MoeKoeMusic 的 apiService (ws://127.0.0.1:6520)
+//   - 协议可通过 chrome.storage.local.wsProtocol 配置为 wss（需服务端支持 TLS）
 //   - 将歌词和播放状态转发给 popup
 //   - 通过 Native Host Bridge 与 MoeKoeMusic 主进程通信，管理 C++ EXE 生命周期
 
 const DEFAULT_WS_PORT = 6520;
 const DEFAULT_HTTP_PORT = 6523;
+
+// WebSocket 协议：默认 ws（明文），可配置为 wss（加密）。
+// 
+// 安全说明：当前使用 ws:// 是因为 MoeKoeMusic 主进程的 apiService 暂未实现 TLS。
+// ws:// 绑定在 127.0.0.1，虽不会经网络传输，但本机其他进程理论上可嗅探 localhost 流量。
+// 待 MoeKoeMusic 服务端支持 wss:// 后，将 DEFAULT_WS_PROTOCOL 改为 'wss' 即可升级。
+// 高级用户也可通过 chrome.storage.local 设置 wsProtocol 覆盖默认值。
+const DEFAULT_WS_PROTOCOL = 'ws';
 const RECONNECT_INTERVAL = 3000;
 const MAX_RECONNECT_DELAY = 30000; // 最大重连间隔 30 秒
 const MAX_RECONNECT_ATTEMPTS = 50;  // 最大重连次数上限，超过后停止自动重连
@@ -19,6 +28,7 @@ let reconnectAttempts = 0;
 let reconnectAborted = false;      // 是否已因达到上限而停止重连
 let lastConnectTime = null;        // 最后成功连接时间（用于 UI 指示）
 let wsPort = DEFAULT_WS_PORT;
+let wsProtocol = DEFAULT_WS_PROTOCOL;
 
 // ---- Token 管理 ----
 // 在 Service Worker 启动时生成并缓存令牌，避免每次同步读取 storage
@@ -29,10 +39,6 @@ async function getAuthToken() {
     if (cachedAuthToken) return cachedAuthToken;
     const result = await chrome.storage.local.get('authToken');
     if (result.authToken) {
-        // 一致性校验：确保缓存的令牌与 storage 中的一致（防止 SW 重启后不同步）
-        if (cachedAuthToken && cachedAuthToken !== result.authToken) {
-            console.warn('[TaskbarLyrics] 缓存令牌与 storage 不一致，以 storage 为准');
-        }
         cachedAuthToken = result.authToken;
         return cachedAuthToken;
     }
@@ -51,13 +57,12 @@ async function getAuthToken() {
 
 async function loadPortConfig() {
     try {
-        const cfg = await chrome.storage.local.get(['wsPort', 'httpPort']);
+        const cfg = await chrome.storage.local.get(['wsPort', 'wsProtocol']);
         wsPort = cfg.wsPort || DEFAULT_WS_PORT;
-        // httpPort 暂未在本文件使用（popup.js 的 HTTP 回退接口独立读取），
-        // 但统一读取以保持配置一致性
-        // httpPort = cfg.httpPort || DEFAULT_HTTP_PORT;
+        wsProtocol = cfg.wsProtocol || DEFAULT_WS_PROTOCOL;
     } catch (e) {
         wsPort = DEFAULT_WS_PORT;
+        wsProtocol = DEFAULT_WS_PROTOCOL;
     }
 }
 
@@ -171,6 +176,8 @@ function scheduleReconnect() {
     // 达到最大重连次数上限后停止自动重连，通知用户手动干预
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         reconnectAborted = true;
+        // 持久化中止状态，防止 Service Worker 重启后丢失
+        chrome.storage.local.set({ reconnectAborted: true }).catch(() => {});
         console.error(`[TaskbarLyrics] 重连已达上限 (${MAX_RECONNECT_ATTEMPTS} 次)，已停止自动重连，请检查服务端状态或手动点击重连`);
         broadcastToPopup({
             type: 'connectionStatus',
@@ -195,16 +202,18 @@ function scheduleReconnect() {
 }
 
 // 手动重置重连计数器（供 popup 的"重新连接"按钮调用）
+// 同时清除持久化的中止标记，确保连接恢复后状态一致
 function resetReconnectState() {
     reconnectAttempts = 0;
     reconnectAborted = false;
+    chrome.storage.local.remove('reconnectAborted').catch(() => {});
 }
 
 function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
     try {
-        ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+        ws = new WebSocket(`${wsProtocol}://127.0.0.1:${wsPort}`);
         let connectionTimeout = null;
         let hasConnected = false;
         let cleared = false;
@@ -371,7 +380,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ---- 启动 ----
 
-loadPortConfig().then(() => {
-    connectWebSocket();
-    console.log(`[TaskbarLyrics] 插件已加载 (v0.5.0 Native Host 模式, WS端口: ${wsPort})`);
+// 恢复持久化状态（防止 Service Worker 重启后丢失重连中止标记）
+async function restorePersistedState() {
+    try {
+        const stored = await chrome.storage.local.get('reconnectAborted');
+        if (stored.reconnectAborted === true) {
+            reconnectAborted = true;
+            console.log('[TaskbarLyrics] 已恢复持久化的重连中止状态');
+        }
+    } catch (_) {}
+}
+
+restorePersistedState().then(() => {
+    return loadPortConfig();
+}).then(() => {
+    // 若上次已中止则不自动重连，等待用户手动触发
+    if (!reconnectAborted) {
+        connectWebSocket();
+        console.log(`[TaskbarLyrics] 插件已加载 (v0.5.0 Native Host 模式, WS端口: ${wsPort})`);
+    } else {
+        console.log(`[TaskbarLyrics] 插件已加载，但上次重连已中止，等待手动重连`);
+        broadcastToPopup({
+            type: 'connectionStatus',
+            connected: false,
+            reconnectAborted: true
+        });
+    }
 });

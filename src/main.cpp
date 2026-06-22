@@ -805,17 +805,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         ::PostMessageW(hMsgWnd, WM_RENDER_UPDATE, 0, 0);
     });
 
-    // 主动检测：MoeKoeMusic 在运行但 API 未开启 → 自动开启并重启
-    {
-        auto apiResult = moekoe::ApiEnabler::TryEnableApi();
-        if (apiResult == moekoe::ApiEnableResult::EnabledAndRestarted) {
-            Log("[MAIN] API auto-enabled and MoeKoeMusic restarted, waiting for new instance...\n");
-            Sleep(2000); // 等待新实例完全启动
-        } else {
-            Log("[MAIN] API auto-enable check result: %s\n",
-                moekoe::ApiEnabler::ResultToString(apiResult).c_str());
-        }
-    }
+    // API 自动开启已迁移到 content.js（localStorage），EXE 不再干预
+    // {
+    //     auto apiResult = moekoe::ApiEnabler::TryEnableApi();
+    //     if (apiResult == moekoe::ApiEnableResult::EnabledAndRestarted) {
+    //         Log("[MAIN] API auto-enabled and MoeKoeMusic restarted, waiting for new instance...\n");
+    //         Sleep(2000);
+    //     } else {
+    //         Log("[MAIN] API auto-enable check result: %s\n",
+    //             moekoe::ApiEnabler::ResultToString(apiResult).c_str());
+    //     }
+    // }
 
     char url[64];
     std::snprintf(url, sizeof(url), "ws://127.0.0.1:%d",

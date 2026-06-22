@@ -140,6 +140,8 @@ cmake --build --preset x64-Release
 - C++ EXE 新增 `NativeMessagingHost` 类封装协议层
 - stdin EOF 不再触发退出，支持独立运行模式
 
+</details>
+
 ## 开发文档
 
 - [MoeKoeMusic\_TaskbarLyrics\_开发文档.md](MoeKoeMusic_TaskbarLyrics_开发文档.md)

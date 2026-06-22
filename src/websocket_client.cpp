@@ -345,13 +345,12 @@ void WebSocketClient::ReconnectLoop() {
             try { client_->stop(); } catch (...) {}
             client_.reset();
 
-            // 连续多次失败后，尝试检测并自动开启 MoeKoeMusic 的 API 模式
-            // 仅在 attempt == 2（即第3次失败，约已等待 1+2=3 秒）时触发一次
-            if (attempt == 2) {
-                Log("Reconnect: triggering API auto-enable check...");
-                auto result = ApiEnabler::TryEnableApi();
-                Log("Reconnect: API auto-enable result = " + ApiEnabler::ResultToString(result));
-            }
+            // API 自动开启已迁移到 content.js（localStorage），EXE 不再干预
+            // if (attempt == 2) {
+            //     Log("Reconnect: triggering API auto-enable check...");
+            //     auto result = ApiEnabler::TryEnableApi();
+            //     Log("Reconnect: API auto-enable result = " + ApiEnabler::ResultToString(result));
+            // }
         } else {
             Log("Reconnect: connected successfully");
         }

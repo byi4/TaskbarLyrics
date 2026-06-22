@@ -44,24 +44,44 @@ port.onMessage.addListener(async (message) => {
 
     switch (message.type) {
         case 'native-host:status': {
-            const result = await window.electronAPI.nativeHost.getStatus(HOST_ID);
-            port.postMessage({
-                type: 'native-host:response',
-                requestId: message.requestId,
-                seq: message.seq,        // 回传序列号（防重放校验）
-                result: result
-            });
+            try {
+                const result = await window.electronAPI.nativeHost.getStatus(HOST_ID);
+                port.postMessage({
+                    type: 'native-host:response',
+                    requestId: message.requestId,
+                    seq: message.seq,
+                    result: result
+                });
+            } catch (e) {
+                console.error('[NativeBridge] getStatus 失败:', e);
+                port.postMessage({
+                    type: 'native-host:response',
+                    requestId: message.requestId,
+                    seq: message.seq,
+                    result: { success: false, message: e.message || 'Native Host 状态查询异常' }
+                });
+            }
             break;
         }
 
         case 'native-host:send': {
-            const result = await window.electronAPI.nativeHost.send(HOST_ID, message.payload);
-            port.postMessage({
-                type: 'native-host:response',
-                requestId: message.requestId,
-                seq: message.seq,        // 回传序列号（防重放校验）
-                result: result
-            });
+            try {
+                const result = await window.electronAPI.nativeHost.send(HOST_ID, message.payload);
+                port.postMessage({
+                    type: 'native-host:response',
+                    requestId: message.requestId,
+                    seq: message.seq,
+                    result: result
+                });
+            } catch (e) {
+                console.error('[NativeBridge] send 失败:', e);
+                port.postMessage({
+                    type: 'native-host:response',
+                    requestId: message.requestId,
+                    seq: message.seq,
+                    result: { success: false, message: e.message || 'Native Host 发送异常' }
+                });
+            }
             break;
         }
     }
