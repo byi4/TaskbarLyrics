@@ -791,11 +791,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
             st.coverArtUrl.empty() ? "(empty)" : st.coverArtUrl.substr(0, 60).c_str());
         parser.UpdatePlayerState(st);
     });
+    bool firstConnected = true;
     wsClient.OnConnectionStatus([&](bool connected) {
         if (app.tray) {
             app.tray->SetTooltip(connected
                 ? L"MoeKoe Taskbar Lyrics (已连接)"
                 : L"MoeKoe Taskbar Lyrics (等待连接...)");
+            if (connected && firstConnected) {
+                firstConnected = false;
+                app.tray->ShowBalloon(
+                    L"MoeKoe Taskbar Lyrics",
+                    L"已连接到 MoeKoeMusic API，歌词将在播放时自动显示");
+            }
         }
     });
 

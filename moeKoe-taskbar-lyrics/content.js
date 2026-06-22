@@ -31,7 +31,12 @@
 
     if (consent === '1') {
         // 已同意：确保 apiMode 开启
+        var wasOff = !isApiModeOn();
         enableApiMode();
+        if (wasOff) {
+            // apiMode 刚被开启 → 给出提示
+            alert('API 模式已开启，重启 MoeKoeMusic 后生效。');
+        }
         return;
     }
 
