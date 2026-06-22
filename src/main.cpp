@@ -670,6 +670,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
     config.Load();
     moekoe::SetLogEnabled(config.Advanced().debugLog);
     Log("[STARTUP] Config loaded\n");
+
+    // 启动时直接写入 MoeKoeMusic 的 config.json，确保 apiMode 已开启
+    // 不依赖 Native Bridge 链路（content.js → background → bridge → main），
+    // 避免链路中任一环节断裂导致 config.json 永远不被写入。
+    // WriteApiMode 内部已做幂等检查（apiMode='on' 时直接跳过）。
+    {
+        const std::string cfgPath = moekoe::ApiEnabler::GetConfigPath();
+        if (!cfgPath.empty()) {
+            bool apiOk = moekoe::ApiEnabler::WriteApiMode(cfgPath);
+            Log("[STARTUP] ApiEnabler::WriteApiMode %s (path=%s)\n",
+                apiOk ? "OK" : "FAILED", cfgPath.c_str());
+        } else {
+            Log("[STARTUP] ApiEnabler::GetConfigPath returned empty, skipping\n");
+        }
+    }
+
     config.SetAutoStart(config.IsAutoStart());
     Log("[STARTUP] AutoStart=%s\n", config.IsAutoStart() ? "ON" : "OFF");
 
