@@ -50,6 +50,11 @@
         if (ok) {
             localStorage.setItem(CONSENT_KEY, '1');
             enableApiMode();
+
+            // 通知 EXE（通过 background.js → Native Bridge）写入 config.json
+            // MoeKoeMusic 主进程读取 config.json（非 localStorage）来启动 WebSocket
+            chrome.runtime.sendMessage({ type: 'enableApiMode' }).catch(function () {});
+
             alert('API 模式已开启，重启 MoeKoeMusic 后生效。');
         } else {
             localStorage.setItem(CONSENT_KEY, '0');

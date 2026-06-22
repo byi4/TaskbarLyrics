@@ -371,6 +371,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendToHost(message.payload).then(result => sendResponse(result));
             return true;
 
+        // content.js 用户授权后触发：通过 Native Bridge 写入 config.json
+        case 'enableApiMode':
+            sendToHost({ action: 'enableApiMode' })
+                .then(result => {
+                    console.log('[TaskbarLyrics] enableApiMode result:', JSON.stringify(result));
+                    sendResponse(result);
+                })
+                .catch(e => {
+                    console.error('[TaskbarLyrics] enableApiMode failed:', e.message);
+                    sendResponse({ result: 'fail', error: e.message });
+                });
+            return true;
+
         default:
             // 对未识别类型的消息显式返回 false，告知 Chrome "我不会响应"
             sendResponse({ error: 'unknown message type' });

@@ -251,6 +251,7 @@ set(SOURCES
     src/process_monitor.cpp
     src/config_dialog.cpp
     src/native_messaging.cpp
+    src/api_enabler.cpp
     src/app_icon.rc
 )
 
@@ -273,6 +274,7 @@ set(HEADERS
     src/tray_icon.h
     src/process_monitor.h
     src/config_dialog.h
+    src/api_enabler.h
 )
 
 # 可执行目标

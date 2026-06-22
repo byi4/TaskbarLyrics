@@ -2,6 +2,7 @@
 // main.cpp - MoeKoeMusic 任务栏歌词插件入口
 //
 #include "config.h"
+#include "api_enabler.h"
 #include "config_dialog.h"
 #include "constants.h"
 #include "fullscreen_detector.h"
@@ -935,6 +936,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR /*cmdLine*/, int /*nSho
         if (msg.payload.contains("action")) {
             std::string action = msg.payload["action"].get<std::string>();
             Log("[NATIVE-HOST] Action: %s\n", action.c_str());
+
+            if (action == "enableApiMode") {
+                // content.js 用户授权后触发：写入 config.json 使主进程启动 WebSocket
+                const std::string cfgPath = moekoe::ApiEnabler::GetConfigPath();
+                const bool ok = cfgPath.empty() ? false : moekoe::ApiEnabler::WriteApiMode(cfgPath);
+                Log("[NATIVE-HOST] enableApiMode: %s (path=%s)\n",
+                    ok ? "success" : "failed", cfgPath.c_str());
+
+                nlohmann::json response;
+                response["action"] = "enableApiMode";
+                response["result"] = ok ? "ok" : "fail";
+                response["path"] = cfgPath;
+                app.nativeHost->SendPayloadEvent(response);
+            }
             // 未来可扩展: set-config, get-status 等
         }
     });
