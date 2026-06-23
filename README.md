@@ -26,7 +26,7 @@
 - **多方向任务栏** — 支持底部 / 顶部 / 左侧 / 右侧任务栏 (待测试)
 - **6 种预设主题色** — 一键切换高亮颜色和普通歌词颜色
 - **跑马灯滚动** — 长歌词自动滚动（bounce / loop / off 三种模式）
-- **WebView2 / D2D 双模式设置界面** — 现代化 WebView2 HTML 设置页或纯 Direct2D 自绘原生界面，可随时切换并记住选择，暗色模式自动适配，实时预览
+- **D2D 原生设置界面** — 纯 Direct2D + DirectWrite 自绘设置界面，实时预览，零外部依赖
 - **卡片样式显示** — 双行歌词 + 封面图标（可选），无卡拉OK效果，独立字号和颜色配置
 
 ## 使用方式
@@ -49,14 +49,13 @@ MoeKoeMusic/plugins/extensions/moeKoe-taskbar-lyrics/
 
 ## 构建环境
 
-| 工具               | 版本          |
-| ---------------- | ----------- |
-| Windows SDK      | 10.0.26100+ |
-| Visual Studio    | 2022 (v143) |
-| MSVC 工具集         | 14.44+      |
-| CMake            | 3.20+       |
-| vcpkg            | latest      |
-| WebView2 Runtime | 已安装         |
+| 工具            | 版本          |
+| ------------- | ----------- |
+| Windows SDK   | 10.0.26100+ |
+| Visual Studio | 2022 (v143) |
+| MSVC 工具集      | 14.44+      |
+| CMake         | 3.20+       |
+| vcpkg         | latest      |
 
 ## 构建
 
@@ -69,7 +68,7 @@ cmake --preset x64-Release
 cmake --build --preset x64-Release
 
 # 打包发布
-.\scripts\package.ps1
+python scripts\pack_zip.py moeKoe-taskbar-lyrics\ moeKoe-taskbar-lyrics.zip
 ```
 
 > **注意**：由于 ixwebsocket 预编译库使用 MSVC 14.44 编译，项目需要使用相同版本工具集。`CMakePresets.json` 已配置自动传递 `/p:PlatformToolsetVersion=14.44.35207`。
@@ -81,7 +80,7 @@ cmake --build --preset x64-Release
 - 拆分 TaskbarWindow 为 ShellCompanion（全屏检测 + 歌词窗口管理）+ TaskbarWindow（纯任务栏子窗口操作）
 - ShellCompanion 管理歌词 HWND 生命周期与全屏显隐逻辑，TaskbarWindow 专注 `SetParent` / `SetWindowPos` / 位置缓存
 
-新增：封面渲染增强、歌词切换动画、频谱、原生设置...
+新增：封面渲染增强、歌词切换动画、频谱、D2D 原生设置界面（替代 WebView2）...
 
 修复：全屏隐藏失效、退出全屏后位置偏移、插件无法开启MoeKoeMusic的api模式、不支持垂直任务栏等问题
 

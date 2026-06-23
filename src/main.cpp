@@ -8,7 +8,7 @@
 #include "fullscreen_detector.h"
 #include "http_server.h"
 #include "logger.h"
-#include "settings_window.h"
+
 #include "d2d_settings_window.h"
 #include "lyrics_data.h"
 #include "lyrics_parser.h"
@@ -44,7 +44,6 @@ struct AppContext {
     // RAII 管理的组件（按依赖顺序声明：先声明后析构）
     std::unique_ptr<moekoe::NativeMessagingHost> nativeHost;
     std::unique_ptr<moekoe::D2DSettingsWindow>   d2dSettingsWindow;
-    std::unique_ptr<moekoe::SettingsWindow>       settingsWindow;
     std::unique_ptr<moekoe::HttpServer>           httpServer;
     std::unique_ptr<moekoe::ProcessMonitor>       processMonitor;
     std::unique_ptr<moekoe::WebSocketClient>      wsClient;
@@ -119,10 +118,6 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         }
         ::MessageBoxW(app.hwnd, msg.c_str(), title.c_str(),
             regOk ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
-        // 同步设置窗口 UI（如果已打开）
-        if (app.settingsWindow && app.settingsWindow->IsWebViewReady()) {
-            app.settingsWindow->SendConfigToWebView(*app.config);
-        }
         break;
     }
     case ID_MENU_RECONNECT: {
@@ -130,159 +125,10 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         break;
     }
     case ID_MENU_SETTINGS: {
-        // 根据上次保存的 UI 模式选择打开哪种设置界面
-        const std::string uiMode = app.config->Advanced().settingsUiMode;
-        const bool useD2D = (uiMode == "d2d");
-
-        if (useD2D) {
-            // ═══════ D2D 原生自绘设置界面 ═══════
-            if (!app.d2dSettingsWindow) {
-                app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
-                app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                    const auto savedPos = app.config->Position();
-                    *app.config = cfg;
-                    app.config->MutablePosition() = savedPos;
-                    ApplyRendererSettings(app);
-                    if (app.taskbarWindow) {
-                        app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                        app.taskbarWindow->Reposition();
-                    }
-                    if (app.tray) {
-                        app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                    }
-                    Log("[SETTINGS] D2D config applied and saved\n");
-                });
-                // 切换到 WebView2 模式的回调
-                app.d2dSettingsWindow->OnSwitchMode([&](const std::string& newMode) {
-                    app.config->MutableAdvanced().settingsUiMode = newMode;
-                    app.config->Save();
-                    Log("[SETTINGS] Switching mode to: %s\n", newMode.c_str());
-                    // 关闭 D2D 窗口后立即打开 WebView2 设置
-                    if (newMode == "webview") {
-                        app.d2dSettingsWindow->Close();
-                        app.d2dSettingsWindow.reset();
-                        app.d2dSettingsWindow = nullptr;
-                        if (!app.settingsWindow) {
-                            app.settingsWindow = std::make_unique<moekoe::SettingsWindow>();
-                            app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                const auto savedPos = app.config->Position();
-                                *app.config = cfg;
-                                app.config->MutablePosition() = savedPos;
-                                ApplyRendererSettings(app);
-                                if (app.taskbarWindow) {
-                                    app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                    app.taskbarWindow->Reposition();
-                                }
-                                if (app.tray) {
-                                    app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                }
-                                Log("[SETTINGS] WebView2 config applied and saved\n");
-                            });
-                            app.settingsWindow->OnSwitchMode([&](const std::string& m) {
-                                Log("[SETTINGS] WebView2 (from D2D) switching mode to: %s\n", m.c_str());
-                                if (m == "d2d") {
-                                    app.settingsWindow->Close();
-                                    app.settingsWindow.reset();
-                                    app.settingsWindow = nullptr;
-                                    if (!app.d2dSettingsWindow) {
-                                        app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
-                                        app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                            const auto savedPos = app.config->Position();
-                                            *app.config = cfg;
-                                            app.config->MutablePosition() = savedPos;
-                                            ApplyRendererSettings(app);
-                                            if (app.taskbarWindow) {
-                                                app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                                app.taskbarWindow->Reposition();
-                                            }
-                                            if (app.tray) {
-                                                app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                            }
-                                            Log("[SETTINGS] D2D config applied and saved\n");
-                                        });
-                                        app.d2dSettingsWindow->OnSwitchMode([&](const std::string& sm) {
-                                            app.config->MutableAdvanced().settingsUiMode = sm;
-                                            app.config->Save();
-                                            Log("[SETTINGS] D2D (from WebView2) switching mode to: %s\n", sm.c_str());
-                                            if (sm == "webview") {
-                                                app.d2dSettingsWindow->Close();
-                                                app.d2dSettingsWindow.reset();
-                                                app.d2dSettingsWindow = nullptr;
-                                                if (!app.settingsWindow) {
-                                                    app.settingsWindow = std::make_unique<moekoe::SettingsWindow>();
-                                                    app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                                        const auto savedPos = app.config->Position();
-                                                        *app.config = cfg;
-                                                        app.config->MutablePosition() = savedPos;
-                                                        ApplyRendererSettings(app);
-                                                        if (app.taskbarWindow) {
-                                                            app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                                            app.taskbarWindow->Reposition();
-                                                        }
-                                                        if (app.tray) {
-                                                            app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                                        }
-                                                        Log("[SETTINGS] WebView2 config applied and saved\n");
-                                                    });
-                                                    app.settingsWindow->OnSwitchMode([&](const std::string& sm2) {
-                                                        app.config->MutableAdvanced().settingsUiMode = sm2;
-                                                        app.config->Save();
-                                                        Log("[SETTINGS] WebView2 switching mode to: %s\n", sm2.c_str());
-                                                        if (sm2 == "d2d") {
-                                                            app.settingsWindow->Close();
-                                                            app.settingsWindow.reset();
-                                                            app.settingsWindow = nullptr;
-                                                            if (!app.d2dSettingsWindow) {
-                                                                app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
-                                                                app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                                                    const auto savedPos = app.config->Position();
-                                                                    *app.config = cfg;
-                                                                    app.config->MutablePosition() = savedPos;
-                                                                    ApplyRendererSettings(app);
-                                                                    if (app.taskbarWindow) {
-                                                                        app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                                                        app.taskbarWindow->Reposition();
-                                                                    }
-                                                                    if (app.tray) {
-                                                                        app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                                                    }
-                                                                    Log("[SETTINGS] D2D config applied and saved\n");
-                                                                });
-                                                                app.d2dSettingsWindow->OnSwitchMode([&](const std::string& sm3) {
-                                                                    app.config->MutableAdvanced().settingsUiMode = sm3;
-                                                                    app.config->Save();
-                                                                });
-                                                            }
-                                                            app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                                                        }
-                                                    });
-                                                }
-                                                app.settingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                                            }
-                                        });
-                                    }
-                                    app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                                }
-                            });
-                        }
-                        app.settingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                    }
-                });
-            }
-
-            if (app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config)) {
-                break; // D2D 窗口创建成功
-            } else {
-                app.d2dSettingsWindow.reset();
-                app.d2dSettingsWindow = nullptr;
-                // D2D 失败，回退到 WebView2
-            }
-        }
-
-        // ═══════ WebView2 设置界面（默认 / 回退） ═══════
-        if (!app.settingsWindow) {
-            app.settingsWindow = std::make_unique<moekoe::SettingsWindow>();
-            app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
+        // D2D 原生自绘设置界面
+        if (!app.d2dSettingsWindow) {
+            app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
+            app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
                 const auto savedPos = app.config->Position();
                 *app.config = cfg;
                 app.config->MutablePosition() = savedPos;
@@ -294,108 +140,17 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
                 if (app.tray) {
                     app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
                 }
-                Log("[SETTINGS] WebView2 config applied and saved\n");
-            });
-            // WebView2 → D2D 切换回调
-            app.settingsWindow->OnSwitchMode([&](const std::string& newMode) {
-                Log("[SETTINGS] WebView2 switching mode to: %s\n", newMode.c_str());
-                // 关闭 WebView2 窗口后立即打开 D2D 原生设置
-                if (newMode == "d2d") {
-                    app.settingsWindow->Close();
-                    app.settingsWindow.reset();
-                    app.settingsWindow = nullptr;
-                    // 创建并显示 D2D 设置窗口
-                    if (!app.d2dSettingsWindow) {
-                        app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
-                        app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                            const auto savedPos = app.config->Position();
-                            *app.config = cfg;
-                            app.config->MutablePosition() = savedPos;
-                            ApplyRendererSettings(app);
-                            if (app.taskbarWindow) {
-                                app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                app.taskbarWindow->Reposition();
-                            }
-                            if (app.tray) {
-                                app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                            }
-                            Log("[SETTINGS] D2D config applied and saved\n");
-                        });
-                        app.d2dSettingsWindow->OnSwitchMode([&](const std::string& m) {
-                            app.config->MutableAdvanced().settingsUiMode = m;
-                            app.config->Save();
-                            Log("[SETTINGS] D2D (from WebView2) switching mode to: %s\n", m.c_str());
-                            if (m == "webview") {
-                                app.d2dSettingsWindow->Close();
-                                app.d2dSettingsWindow.reset();
-                                app.d2dSettingsWindow = nullptr;
-                                if (!app.settingsWindow) {
-                                    app.settingsWindow = std::make_unique<moekoe::SettingsWindow>();
-                                    app.settingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                        const auto savedPos = app.config->Position();
-                                        *app.config = cfg;
-                                        app.config->MutablePosition() = savedPos;
-                                        ApplyRendererSettings(app);
-                                        if (app.taskbarWindow) {
-                                            app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                            app.taskbarWindow->Reposition();
-                                        }
-                                        if (app.tray) {
-                                            app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                        }
-                                        Log("[SETTINGS] WebView2 config applied and saved\n");
-                                    });
-                                    app.settingsWindow->OnSwitchMode([&](const std::string& sm) {
-                                        app.config->MutableAdvanced().settingsUiMode = sm;
-                                        app.config->Save();
-                                        Log("[SETTINGS] WebView2 (from D2D) switching mode to: %s\n", sm.c_str());
-                                        if (sm == "d2d") {
-                                            app.settingsWindow->Close();
-                                            app.settingsWindow.reset();
-                                            app.settingsWindow = nullptr;
-                                            if (!app.d2dSettingsWindow) {
-                                                app.d2dSettingsWindow = std::make_unique<moekoe::D2DSettingsWindow>();
-                                                app.d2dSettingsWindow->OnConfigChanged([&](const moekoe::Config& cfg) {
-                                                    const auto savedPos = app.config->Position();
-                                                    *app.config = cfg;
-                                                    app.config->MutablePosition() = savedPos;
-                                                    ApplyRendererSettings(app);
-                                                    if (app.taskbarWindow) {
-                                                        app.taskbarWindow->SetDisplayMode(cfg.Appearance().displayMode);
-                                                        app.taskbarWindow->Reposition();
-                                                    }
-                                                    if (app.tray) {
-                                                        app.tray->SetMenuCheckedAutoStart(cfg.IsAutoStart());
-                                                    }
-                                                    Log("[SETTINGS] D2D config applied and saved\n");
-                                                });
-                                                app.d2dSettingsWindow->OnSwitchMode([&](const std::string& sm2) {
-                                                    app.config->MutableAdvanced().settingsUiMode = sm2;
-                                                    app.config->Save();
-                                                });
-                                            }
-                                            app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                                        }
-                                    });
-                                }
-                                app.settingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                            }
-                        });
-                    }
-                    app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config);
-                }
+                Log("[SETTINGS] D2D config applied and saved\n");
             });
         }
 
-        if (app.settingsWindow->Show(app.hInstance, app.hwnd, *app.config)) {
-            break; // WebView2 窗口创建成功
-        } else {
-            // WebView2 也失败，回退到 Win32 对话框
-            app.settingsWindow.reset();
-            app.settingsWindow = nullptr;
+        if (app.d2dSettingsWindow->Show(app.hInstance, app.hwnd, *app.config)) {
+            break;
         }
+        app.d2dSettingsWindow.reset();
+        app.d2dSettingsWindow = nullptr;
 
-        // ═══════ 最终回退：Win32 原生对话框 ═══════
+        // ═══════ 回退：Win32 原生对话框 ═══════
         if (moekoe::ConfigDialog::Show(app.hInstance, app.hwnd, *app.config,
                                        /*boundMode*/ false,
                                        [&app]() {

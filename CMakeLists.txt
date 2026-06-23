@@ -163,80 +163,12 @@ set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}")
 message(STATUS "Found nlohmann_json: ${NLOHMANN_JSON_INCLUDE_DIR}")
 
-# 6. WebView2 SDK（NuGet 包或系统安装）
-# 优先使用 CMake 变量指定的路径（CI 环境），再回退到环境变量和常见安装路径
-# NuGet 包路径使用 $ENV{USERPROFILE} 避免硬编码用户名
-find_path(WEBVIEW2_INCLUDE_DIR WebView2.h
-    HINTS
-        "${WEBVIEW2_INCLUDE_DIR}"
-    PATHS
-        "$ENV{WEBVIEW2_INCLUDE_DIR}"
-        "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
-        "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
-        "C:/Program Files (x86)/Microsoft/Edge WebView2"
-        "C:/Program Files/Microsoft/Edge WebView2"
-    PATH_SUFFIXES "build/native/include"
-    NO_DEFAULT_PATH)
-
-# 如果找到 NuGet 包根目录但没有子版本目录，尝试自动查找
-if(NOT WEBVIEW2_INCLUDE_DIR AND EXISTS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2")
-    file(GLOB _WEBVIEW2_VERSIONS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2/*")
-    if(_WEBVIEW2_VERSIONS)
-        list(SORT _WEBVIEW2_VERSIONS ORDER DESCENDING)
-        list(GET _WEBVIEW2_VERSIONS 0 _WEBVIEW2_LATEST)
-        if(EXISTS "${_WEBVIEW2_LATEST}/build/native/include/WebView2.h")
-            set(WEBVIEW2_INCLUDE_DIR "${_WEBVIEW2_LATEST}/build/native/include")
-        endif()
-    endif()
-endif()
-
-if(WEBVIEW2_INCLUDE_DIR)
-    message(STATUS "Found WebView2: ${WEBVIEW2_INCLUDE_DIR}")
-else()
-    message(WARNING "WebView2 SDK headers not found - SettingsWindow will not compile")
-endif()
-
-# 7. WebView2 Loader 库（运行时动态链接）
-# CI 通过 -DWEBVIEW2_LOADER_DIR 传入目录，本地回退到常见安装路径
-# 注意：NuGet 包中的导入库名为 WebView2Loader.dll.lib（非 WebView2Loader.lib）
-find_library(WEBVIEW2_LOADER_LIB
-    NAMES WebView2Loader.dll.lib WebView2Loader
-    HINTS
-        "${WEBVIEW2_LOADER_DIR}"
-    PATHS
-        "$ENV{WEBVIEW2_LOADER_DIR}"
-        "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
-        "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
-        "C:/Program Files (x86)/Microsoft/Edge WebView2"
-    PATH_SUFFIXES "build/native/x64"
-    NO_DEFAULT_PATH)
-
-# 同样尝试自动查找 NuGet 版本目录
-if(NOT WEBVIEW2_LOADER_LIB AND EXISTS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2")
-    file(GLOB _WEBVIEW2_VERSIONS "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2/*")
-    if(_WEBVIEW2_VERSIONS)
-        list(SORT _WEBVIEW2_VERSIONS ORDER DESCENDING)
-        list(GET _WEBVIEW2_VERSIONS 0 _WEBVIEW2_LATEST)
-        find_library(WEBVIEW2_LOADER_LIB
-            NAMES WebView2Loader.dll.lib WebView2Loader
-            PATHS "${_WEBVIEW2_LATEST}/build/native/x64"
-            NO_DEFAULT_PATH)
-    endif()
-endif()
-
-if(WEBVIEW2_LOADER_LIB)
-    message(STATUS "Found WebView2Loader.lib: ${WEBVIEW2_LOADER_LIB}")
-else()
-    message(WARNING "WebView2Loader.lib NOT found - linking will fail if SettingsWindow is used")
-endif()
-
 # 源文件
 set(SOURCES
     src/main.cpp
     src/logger.cpp
     src/websocket_client.cpp
     src/http_server.cpp
-    src/settings_window.cpp
     src/d2d_settings_window.cpp
     src/lyrics_parser.cpp
     src/shell_companion.cpp
@@ -261,7 +193,6 @@ set(HEADERS
     src/lyrics_data.h
     src/websocket_client.h
     src/http_server.h
-    src/settings_window.h
     src/d2d_settings_window.h
     src/lyrics_parser.h
     src/shell_companion.h
@@ -283,7 +214,6 @@ add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 target_include_directories(${PROJECT_NAME} PRIVATE
     src
     ${NLOHMANN_JSON_INCLUDE_DIR}
-    ${WEBVIEW2_INCLUDE_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -306,7 +236,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     bcrypt
     winhttp          # iTunes Strategy HTTP 请求
     windowsapp        # C++/WinRT 运行时 (SMTC)
-    ${WEBVIEW2_LOADER_LIB}
     dwmapi            # DWM 圆角窗口 (D2D 设置界面)
     UIAutomationCore   # UI Automation: 获取任务栏子窗口几何信息
 )
@@ -338,34 +267,7 @@ if(MSVC)
     endif()
 
     # 复制运行时 DLL 到输出目录
-    # 1) WebView2Loader.dll（WebView2 运行时依赖）
-    if(WEBVIEW2_LOADER_LIB)
-        get_filename_component(WEBVIEW2_DLL_DIR "${WEBVIEW2_LOADER_LIB}" DIRECTORY)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${WEBVIEW2_DLL_DIR}/WebView2Loader.dll"
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll
-            COMMENT "Copying WebView2Loader.dll to output directory")
-    else()
-        # 回退：尝试常见安装路径
-        find_file(WEBVIEW2_LOADER_DLL WebView2Loader.dll
-            PATHS
-                "$ENV{WEBVIEW2_LOADER_DIR}"
-                "$ENV{LOCALAPPDATA}/Microsoft/Edge WebView2"
-                "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
-                "C:/Program Files (x86)/Microsoft/Edge WebView2"
-            PATH_SUFFIXES "build/native/x64"
-            NO_DEFAULT_PATH)
-        if(WEBVIEW2_LOADER_DLL)
-            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${WEBVIEW2_LOADER_DLL}"
-                    $<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll
-                COMMENT "Copying WebView2Loader.dll to output directory")
-        endif()
-    endif()
-
-    # 2) z.dll（zlib 运行时依赖）
+    # 1) z.dll（zlib 运行时依赖）
     find_file(ZLIB_RUNTIME_DLL z.dll PATHS "${VCPKG_INSTALLED_DIR}/bin" NO_DEFAULT_PATH)
     if(ZLIB_RUNTIME_DLL)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

@@ -428,16 +428,6 @@ void D2DSettingsWindow::BuildControls(const Config& cfg) {
     addSection("通用");
     addToggle("autoStart", "开机自动启动", cfg.IsAutoStart());
 
-    // ===== 切换按钮 =====
-    addSpacer();
-    {
-        Control c;
-        c.type = CtrlType::SwitchUIBtn;
-        c.id = "switchUI";
-        c.buttonText = "切换到 WebView2 设置";
-        controls_.push_back(c);
-    }
-
     // ===== 操作按钮 =====
     addSpacer();
     {
@@ -594,15 +584,10 @@ void D2DSettingsWindow::LayoutControls(int contentWidth) {
             y += 8;
             c.rect = {0, y, 0, y};
             break;
-
-        case CtrlType::SwitchUIBtn:
-            c.rect = {leftPad, y, controlRight, y + 34};
-            y += 34;
-            break;
         }
     }
 
-    totalContentHeight_ = y + 20;
+    totalContentHeight_ = y + 20 + 28; // +28 为底部版本号预留
 }
 
 // ═══════════════════════════════
@@ -640,8 +625,9 @@ void D2DSettingsWindow::DrawAll() {
     accentBrush_->SetColor(theme_.accent);
     accentHoverBrush_->SetColor(theme_.accentHover);
 
-    const int clientH = [this]() {
-        RECT rc; GetClientRect(hwnd_, &rc); return rc.bottom; }();
+    RECT clientRc; GetClientRect(hwnd_, &clientRc);
+    const int clientW = clientRc.right;
+    const int clientH = clientRc.bottom;
 
     // 绘制每个可见控件
     for (const auto& c : controls_) {
@@ -660,8 +646,29 @@ void D2DSettingsWindow::DrawAll() {
         case CtrlType::ButtonRow:       DrawButtonRow(renderTarget_.Get(), c);      break;
         case CtrlType::ThemePresets:    DrawThemePresets(renderTarget_.Get(), c);   break;
         case CtrlType::HintText:        DrawHintText(renderTarget_.Get(), c);       break;
-        case CtrlType::SwitchUIBtn:     DrawSwitchUIButton(renderTarget_.Get(), c);  break;
         default: break;
+        }
+    }
+
+    // 绘制底部版本号（在控件之后，随内容滚动）
+    {
+        const wchar_t* versionText = L"MoeKoe Taskbar Lyrics v0.5.0";
+        float verY = static_cast<float>(totalContentHeight_ - 24) - scrollOffset_;
+        if (verY + 20.f > 0 && verY < static_cast<float>(clientH)) {
+            float textWidth = 0;
+            ComPtr<IDWriteTextLayout> verLayout;
+            if (SUCCEEDED(dwriteFactory_->CreateTextLayout(
+                    versionText, static_cast<UINT>(wcslen(versionText)),
+                    hintFmt_.Get(), 0, 0, &verLayout))) {
+                DWRITE_TEXT_METRICS tm = {};
+                verLayout->GetMetrics(&tm);
+                textWidth = tm.width;
+            }
+            float verX = (static_cast<float>(clientW) - textWidth) / 2.f;
+            renderTarget_->DrawText(versionText, static_cast<UINT>(wcslen(versionText)),
+                                    hintFmt_.Get(),
+                                    D2D1::RectF(verX, verY, verX + static_cast<float>(clientW), verY + 200),
+                                    textSecondaryBrush_.Get());
         }
     }
 
@@ -1051,29 +1058,6 @@ void D2DSettingsWindow::DrawHintText(ID2D1RenderTarget* rt, const Control& c) {
                  wide.c_str(), static_cast<float>(c.rect.left), top, 380.f);
 }
 
-void D2DSettingsWindow::DrawSwitchUIButton(ID2D1RenderTarget* rt, const Control& c) {
-    float top = static_cast<float>(c.rect.top) - scrollOffset_;
-    float mid = top + static_cast<float>(c.rect.bottom - c.rect.top) / 2.f;
-
-    bool hovered = hoverCtrl_ == &c;
-
-    ComPtr<ID2D1SolidColorBrush> btnBg, btnBorder, btnText;
-    rt->CreateSolidColorBrush(hovered ? theme_.surface : theme_.bg, &btnBg);
-    rt->CreateSolidColorBrush(hovered ? theme_.accent : theme_.border, &btnBorder);
-    rt->CreateSolidColorBrush(hovered ? theme_.accent : theme_.textSecondary, &btnText);
-
-    float bw = 200.f, bh = 28.f;
-    float bx = static_cast<float>(c.rect.left);
-    float by = mid - bh / 2.f;
-
-    FillRoundedRect(rt, btnBg.Get(), bx, by, bw, bh, 6.f);
-    DrawRoundedRect(rt, btnBorder.Get(), 1.f, bx, by, bw, bh, 6.f);
-
-    std::wstring wtxt = Utf8ToWide(c.buttonText);;
-    DrawTextLine(rt, btnFmt_.Get(), btnText.Get(),
-                 wtxt.c_str(), bx + 16.f, by + 5.f, bw - 32.f);
-}
-
 void D2DSettingsWindow::DrawTitleBar(ID2D1RenderTarget* rt) {
     RECT rc; GetClientRect(hwnd_, &rc);
     float W = static_cast<float>(rc.right);
@@ -1261,12 +1245,6 @@ void D2DSettingsWindow::OnMouseDown(int x, int y) {
         break;
     }
 
-    case CtrlType::SwitchUIBtn:
-        // 延迟切换：PostMessage 避免 delete this 后返回已销毁对象
-        pendingSwitchMode_ = "webview";
-        ::PostMessageW(hwnd_, kMsgSwitchMode, 0, 0);
-        break;
-
     default:
         break;
     }
@@ -1441,8 +1419,7 @@ void D2DSettingsWindow::ApplyAndSave() {
         }
     }
 
-    // 回调通知主程序（确保 settingsUiMode 为 d2d）
-    editedConfig_.MutableAdvanced().settingsUiMode = "d2d";
+    // 回调通知主程序
     if (onConfigChanged_) onConfigChanged_(editedConfig_);
 
     Log("[D2D-SETTINGS] Config applied and saved\n");
@@ -1540,14 +1517,6 @@ LRESULT CALLBACK D2DSettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, 
         return 0;
     case WM_KILLFOCUS:
         if (self) self->OnLoseFocus();
-        return 0;
-
-    case D2DSettingsWindow::kMsgSwitchMode:
-        // 延迟执行的 UI 模式切换（此时已脱离 OnMouseDown 调用栈，安全 delete this）
-        if (self && self->onSwitchMode_ && !self->pendingSwitchMode_.empty()) {
-            std::string mode = std::move(self->pendingSwitchMode_);
-            self->onSwitchMode_(mode);
-        }
         return 0;
 
     case D2DSettingsWindow::kMsgApplySave:

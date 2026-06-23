@@ -40,7 +40,7 @@ MoeKoeMusic 是一款基于 Electron + Vue 3 的开源音乐播放器，其 Wind
 | **零侵入**   | 不修改 MoeKoeMusic 本体任何文件，独立 EXE 运行          |
 | **独立维护**  | 插件可脱离主程序版本独立迭代                            |
 | **轻量高效**  | CPU 占用 < 2%，内存占用 < 20MB                   |
-| **用户友好**  | 即开即用，系统托盘右键菜单控制锁定/设置/退出，WebView2 GUI 设置界面 |
+| **用户友好**  | 即开即用，系统托盘右键菜单控制锁定/设置/退出，D2D 原生设置界面 |
 | **覆盖任务栏** | 独立浮动窗口 + WS\_EX\_TOPMOST，视觉上与任务栏融合        |
 
 ### 1.4 数据获取策略
@@ -72,17 +72,15 @@ MoeKoeMusic-TaskbarLyrics/
 │   ├── api_enabler.cpp/h       # MoeKoeMusic API 模式自动检测与开启（v0.3.1 新增）
 │   ├── tray_icon.cpp/h         # 系统托盘图标+菜单（含锁定位置/完全锁定）
 │   ├── logger.cpp/h            # 统一日志系统（v0.3.8 新增，替代 6 处分散 DebugLog）
-│   ├── settings_window.cpp/h   # WebView2 设置窗口（含 COM 回调）
-│   ├── d2d_settings_window.cpp/h # Direct2D 自绘设置窗口（v0.5 新增，与 WebView2 可切换）
+│   ├── d2d_settings_window.cpp/h # Direct2D 自绘设置窗口（v0.5 新增，唯一设置界面）
 │   ├── config_dialog.cpp/h     # Win32 回退设置对话框
 │   └── app_icon.rc             # EXE 图标资源
 ├── resources/
 │   ├── icon.ico                # 托盘/程序图标
-│   ├── settings.html           # WebView2 设置页面（含跑马灯控制 UI）
 │   └── icon.png                # Chrome Extension 图标
 ├── scripts/
-│   └── package.ps1             # 发布打包脚本（生成符合 MoeKoeMusic-Plugins 审核规范的 zip）
-├── public/                     # 发布包根目录（package.ps1 自动生成）
+│   └── pack_zip.py            # 发布打包脚本（Python zipfile，正斜杠路径，兼容 MoeKoeMusic）
+├── public/                     # 发布包根目录（pack_zip.py 自动生成）
 │   └── icons/
 │       └── icon256.png         # 插件中心图标（raw GitHub URL 可直接访问）
 ├── moeKoe-taskbar-lyrics/      # Chrome Extension 插件目录
@@ -153,7 +151,7 @@ MoeKoeMusic-TaskbarLyrics/
 │  └────────────────────────────────────────┘                │
 │                                                             │
 │  ┌────────────────────────────────────────┐                │
-│  │ WebView2 / D2D 设置界面（可切换，记住选择）   │                │
+│  │ D2D 原生设置界面                          │                │
 │  └────────────────────────────────────────┘                │
 └─────────────────────────────────────────────────────────────┘
 
@@ -170,7 +168,6 @@ EXE stdout (JSON Lines) → Electron Main Process → native-host-message IPC
 | --------- | ------------------------------ | ---------------------------------------------- |
 | 窗口系统      | Win32 API                      | 创建浮动窗口、消息循环、DPI 感知                             |
 | 图形渲染      | **Direct2D** + **DirectWrite** | GPU 加速的文字渲染（WIC BitmapRenderTarget）            |
-| 内嵌浏览器     | **WebView2** (Edge Chromium)   | GUI 设置界面（可回退 Win32 对话框）                        |
 | 通信协议      | **WebSocket**（RFC 6455）        | 从 MoeKoeMusic 获取实时数据                           |
 | 托管通信      | **JSON Lines** (stdin/stdout)  | Native Host 与 MoeKoeMusic 主进程通信（v0.4.0）        |
 | 回退通信      | **HTTP** (:6523)               | 独立模式下 Chrome Extension popup.js 通信             |
@@ -410,8 +407,7 @@ WM\_TIMER 渲染循环中捕获异常后：
     "websocket_port": 6520,
     "http_server_port": 6523,
     "refresh_rate_hz": 60,
-    "debug_log": false,
-    "settings_ui_mode": "webview"
+    "debug_log": false
   },
   "position": { "offset_x": 0, "offset_y": 0, "lock_position": false, "lock_fully": false }
 }
@@ -448,7 +444,7 @@ WM\_TIMER 渲染循环中捕获异常后：
 │ ✅ 开机自动启动       │  ← ID_MENU_AUTOSTART
 ├──────────────────────┤
 │ 重新连接              │  ← ID_MENU_RECONNECT
-│ 设置                  │  ← ID_MENU_SETTINGS (WebView2)
+│ 设置                  │  ← ID_MENU_SETTINGS (D2D 原生)
 ├──────────────────────┤
 │ ☐ 锁定位置            │  ← ID_MENU_LOCK_POS（禁止拖动，保留按钮）
 │ ☐ 完全锁定            │  ← ID_MENU_LOCK_FULL（禁止所有交互）
@@ -459,64 +455,19 @@ WM\_TIMER 渲染循环中捕获异常后：
 
 回调消息号使用 `WM_TRAY_CALLBACK` (0x0600)，定义于 constants.h。
 
-### 3.8 WebView2 设置窗口模块（含 D2D 自绘切换）
+### 3.8 D2D 原生设置窗口模块
 
-**文件：** `src/settings_window.cpp/h` + `resources/settings.html`\
-**自绘替代：** `src/d2d_settings_window.cpp/h`（v0.5 新增）
+**文件：** `src/d2d_settings_window.cpp/h`（v0.5 新增）
 
-#### 双模式设置界面
+#### 纯 Direct2D 自绘设置界面
 
-插件提供两套设置界面，可在两者之间随时切换，选择会被记住（`advanced.settings_ui_mode`）：
+插件提供唯一的设置界面——基于纯 Direct2D + DirectWrite 自绘，零外部依赖。
 
-| 模式          | 文件                           | 说明                                      |
-| ------------ | ----------------------------- | --------------------------------------- |
-| `"webview"` | settings_window + settings.html | 基于 WebView2 的 HTML 设置页面（默认），现代 UI       |
-| `"d2d"`     | d2d_settings_window           | 纯 Direct2D/DirectWrite 自绘原生设置界面，零外部依赖 |
-
-- 两种模式的功能完全一致（所有配置项均可操作）
-- 界面中提供「切换到原生设置」/「切换到 WebView2 设置」按钮
-- 切换时自动关闭当前窗口并打开新模式窗口，不丢失配置
-- 上次使用的模式保存在 `settings_ui_mode` 中，下次打开设置时自动使用
-
-#### D2D 自绘设置界面特性（v0.5 新增）
-
-- **纯 Direct2D + DirectWrite 渲染**，不使用 WebView2 Runtime，零外部依赖
-- **自绘控件体系**：LabelRow / ToggleRow / SliderRow / ColorRow / DropdownRow / ButtonRow / ThemePresets / HintText / SwitchUIBtn
+- **自绘控件体系**：LabelRow / ToggleRow / SliderRow / ColorRow / DropdownRow / ButtonRow / ThemePresets / HintText
 - **自绘标题栏**：支持窗口拖动、关闭（×）和最小化（─）按钮
 - **暗/亮模式自动检测**：通过注册表读取系统主题设置，自动匹配颜色方案
-- **延迟操作模式**：切换 UI 模式、应用保存、取消等操作通过 PostMessage 投递到消息队列安全执行
-- 与 WebView2 版本功能完全对等，提供一致的用户体验
-
-#### WebView2 初始化流程
-
-#### 初始化流程
-
-```
-CreateWindowEx → WM_NCCREATE(return TRUE)
-  → ICoreWebView2Environment_CreateAsync
-    → ICoreWebView2Controller_CreateAsync
-      → OnControllerReady:
-        → 检查 settings.html 存在性
-        → put_Bounds + put_IsVisible(TRUE)
-        → add_NavigationCompleted → 发送 initConfig
-        → add_WebMessageReceived → 处理 saveConfig/fontSelected
-```
-
-#### 双向通信协议
-
-| 方向   | 消息类型           | 数据                    |
-| ---- | -------------- | --------------------- |
-| C→JS | `initConfig`   | 完整配置 JSON             |
-| JS→C | `saveConfig`   | 用户修改后的完整配置 JSON       |
-| JS→C | `fontSelected` | 字体名称（ChooseFontW 选择后） |
-
-#### 关键技术点
-
-- **字体选择无重入**：通过 `PostMessage(hwnd_, WM_PICK_FONT, ...)` 在 WndProc 中调用 ChooseFontW，避免 WebView2 事件处理器中的模态对话框重入问题
-- **UTF-8/UTF-16 转换**：统一使用 `Utf8ToWide()` / `WideToUtf8()` 辅助函数，防止乱码
-- **JSON 类型安全**：settings.html 中对 event.data 做 `typeof === 'string'` 检查后再 JSON.parse
-- **保存即关闭**：saveConfig 成功后自动 Close() 窗口
-- **失败回退**：WebView2 初始化失败时自动回退到 Win32 ConfigDialog
+- **延迟操作模式**：应用保存、取消等操作通过 PostMessage 投递到消息队列安全执行
+- 所有配置项均可操作，功能完整覆盖
 
 ### 3.9 进程监控模块
 
@@ -682,17 +633,13 @@ ApiEnabler::TryEnableApi()
 | -------------- | -------------------------------- | -------------- |
 | ixwebsocket    | vcpkg                            | WebSocket 客户端  |
 | nlohmann\_json | vcpkg                            | JSON 解析        |
-| WebView2       | NuGet (`microsoft.web.webview2`) | 设置界面浏览器引擎      |
 | zlib           | vcpkg (z.dll)                    | ixwebsocket 依赖 |
 
 #### 构建后操作
 
 - 复制 `resources/icon.ico` → 输出目录
-- 复制 `resources/settings.html` → 输出目录
-- 复制 `WebView2Loader.dll` → 输出目录
 - 复制 `z.dll` → 输出目录（含 find\_library 回退）
 - 编译 `app_icon.rc` → 图标资源嵌入 EXE
-- 编译 `api_enabler.cpp/h` → API 自动开启模块（v0.3.1 新增）
 
 #### 构建命令
 
@@ -768,22 +715,7 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 > **注意：** popup.js 不再仅凭 `r.ok` 判断成功，而是解析 JSON 响应体校验确定性字段（如 `status === "shutting_down"`）。
 
-### 4.3 WebView2 通信协议
-
-**方向：C++ → JavaScript**
-
-```json
-{"type":"initConfig","data":{/* 完整配置对象 */}}
-```
-
-**方向：JavaScript → C++**
-
-```json
-{"type":"saveConfig","data":{/* 修改后的配置 */}}
-{"type":"fontSelected","data":{"fontFamily":"Segoe UI"}}
-```
-
-### 4.4 字段格式对照
+### 4.3 字段格式对照
 
 | 字段                              | 类型     | 示例              | 说明        |
 | ------------------------------- | ------ | --------------- | --------- |
@@ -796,7 +728,7 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 | `data.isPlaying`                | bool   | `true`          | 播放状态      |
 | `data.currentTime`              | double | `12.5`          | 当前进度 (秒)  |
 
-### 4.5 MoeKoeMusic 端口清单
+### 4.4 MoeKoeMusic 端口清单
 
 | 端口   | 用途                           | 协议        | 可配置                       |
 | ---- | ---------------------------- | --------- | ------------------------- |
@@ -816,7 +748,6 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 | Visual Studio | 2022 (v143 工具集)              |
 | CMake         | 3.20+                        |
 | vcpkg         | 最新版                          |
-| .NET SDK      | 6.0+ （NuGet WebView2 还原需要）   |
 
 ### 5.2 部署流程
 
@@ -836,16 +767,16 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 
 ### 5.2.1 发布打包
 
-使用 `scripts/package.ps1` 生成符合 MoeKoeMusic-Plugins 审核规范的 zip：
+使用 `scripts/pack_zip.py` 生成符合 MoeKoeMusic 插件规范的 zip：
 
-```powershell
-.\scripts\package.ps1
+```bash
+python scripts\pack_zip.py moeKoe-taskbar-lyrics\ moeKoe-taskbar-lyrics.zip
 # 输出: moeKoe-taskbar-lyrics.zip
-# 内部结构:
-#   public/
+# 内部结构（所有文件在顶层目录 moeKoe-taskbar-lyrics/ 内）:
+#   moeKoe-taskbar-lyrics/
 #     manifest.json
 #     background.js / popup.js / popup.html
-#     native-bridge.html / native-bridge.js    ← v0.4.0 新增
+#     native-bridge.html / native-bridge.js
 #     icons/icon256.png
 #     MoeKoeTaskbarLyrics.exe (+ DLLs)
 ```
@@ -863,7 +794,7 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 | 勾选"完全锁定"     | 禁止所有鼠标交互（含悬停和按钮），同时隐含锁定位置    |
 | 取消勾选"开机自动启动" | 删除注册表 Run key                |
 | 点击"重新连接"     | 断开并重新连接 WebSocket            |
-| 点击"设置"       | 打开 WebView2 设置窗口（GUI 配置界面）   |
+| 点击"设置"       | 打开 D2D 原生设置窗口（GUI 配置界面）   |
 | 点击"退出"       | 进程退出                         |
 
 ### 5.4 卸载
@@ -938,7 +869,6 @@ Token 值定义于 `constants.h` 的 `moekoe::constants::LOCAL_AUTH_TOKEN`。OPT
 | Direct2D 官方教程         | <https://learn.microsoft.com/en-us/windows/win32/direct2d/direct2d-tutorial>                                |
 | DirectWrite 文字渲染      | <https://learn.microsoft.com/en-us/windows/win32/directwrite/text-formatting-and-layout>                    |
 | High DPI 桌面应用         | <https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows> |
-| WebView2 官方文档         | <https://learn.microsoft.com/en-us/microsoft-edge/webview2/>                                                |
 | ixwebsocket           | <https://github.com/machinezone/IXWebSocket>                                                                |
 | nlohmann/json         | <https://github.com/nlohmann/json>                                                                          |
 

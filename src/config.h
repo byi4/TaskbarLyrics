@@ -53,9 +53,6 @@ struct AdvancedConfig {
     int  refreshRateHz{60};
     bool debugLog{false};
     bool enableFullscreenHide{true};  // 全屏时自动隐藏歌词
-
-    // 设置界面模式: "webview" (默认) | "d2d" (原生 D2D 自绘)
-    std::string settingsUiMode{"webview"};
 };
 
 // 歌词窗口位置偏移（用户可拖动调整）

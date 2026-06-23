@@ -4,7 +4,7 @@
 // 职责:
 //   - 使用 Direct2D + DirectWrite 绘制现代化设置界面（圆角、阴影、毛玻璃背景）
 //   - 提供与 settings.html 功能完全一致的设置项
-//   - 支持切换到 WebView2 模式，并记住用户选择
+//   - 仅保留原生 Direct2D 设置界面
 //
 #pragma once
 
@@ -24,7 +24,6 @@ namespace moekoe {
 class D2DSettingsWindow {
 public:
     using ConfigChangedCallback = std::function<void(const Config&)>;
-    using SwitchModeCallback    = std::function<void(const std::string& mode)>; // "webview" / "d2d"
 
     D2DSettingsWindow();
     ~D2DSettingsWindow();
@@ -37,7 +36,6 @@ public:
 
     // 注册回调
     void OnConfigChanged(ConfigChangedCallback cb) { onConfigChanged_ = std::move(cb); }
-    void OnSwitchMode(SwitchModeCallback cb)      { onSwitchMode_  = std::move(cb); }
 
     // 是否正在显示
     bool IsVisible() const;
@@ -69,7 +67,6 @@ private:
         ThemePresets,   // 预设主题按钮组
         HintText,       // 灰色提示文字
         Spacer,         // 分隔间距
-        SwitchUIBtn,    // 切换到 WebView2 的按钮
     };
 
     struct Control {
@@ -137,7 +134,6 @@ private:
     void DrawButtonRow(ID2D1RenderTarget* rt, const Control& c);
     void DrawThemePresets(ID2D1RenderTarget* rt, const Control& c);
     void DrawHintText(ID2D1RenderTarget* rt, const Control& c);
-    void DrawSwitchUIButton(ID2D1RenderTarget* rt, const Control& c);
     void DrawTitleBar(ID2D1RenderTarget* rt);  // 自绘标题栏（关闭/最小化按钮）
 
     // 鼠标/键盘事件处理
@@ -186,7 +182,6 @@ private:
     Config currentConfig_;
     Config editedConfig_;  // 编辑中的配置副本
     ConfigChangedCallback onConfigChanged_;
-    SwitchModeCallback    onSwitchMode_;
 
     std::vector<Control> controls_;
     Control* hoverCtrl_{nullptr};
@@ -232,11 +227,9 @@ private:
     static constexpr const wchar_t* kWindowClass = L"MoeKoeTaskbarLyricsD2DSettingsClass";
     static bool classRegistered_;
 
-    // 延迟切换/关闭：避免在消息处理中 delete this 导致崩溃
-    static constexpr UINT kMsgSwitchMode = WM_APP + 1;
+    // 延迟关闭：避免在消息处理中 delete this 导致崩溃
     static constexpr UINT kMsgApplySave  = WM_APP + 2;
     static constexpr UINT kMsgCancel     = WM_APP + 3;
-    std::string pendingSwitchMode_;  // PostMessage 时暂存目标模式
 };
 
 } // namespace moekoe

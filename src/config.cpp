@@ -153,7 +153,6 @@ bool Config::Load() {
             advanced_.refreshRateHz        = a.value("refresh_rate_hz",          advanced_.refreshRateHz);
             advanced_.debugLog             = a.value("debug_log",               advanced_.debugLog);
             advanced_.enableFullscreenHide = a.value("enable_fullscreen_hide",  advanced_.enableFullscreenHide);
-            advanced_.settingsUiMode       = a.value("settings_ui_mode",        advanced_.settingsUiMode);
         }
 
         if (j.contains("position")) {
@@ -235,7 +234,6 @@ bool Config::Save() const {
         {"refresh_rate_hz",         advanced_.refreshRateHz},
         {"debug_log",               advanced_.debugLog},
         {"enable_fullscreen_hide",  advanced_.enableFullscreenHide},
-        {"settings_ui_mode",        advanced_.settingsUiMode},
     };
 
     j["position"] = {
