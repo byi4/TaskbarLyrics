@@ -70,9 +70,9 @@ constexpr const char* LOCAL_AUTH_HEADER_NAME = "X-MoeKoe-Token";
 constexpr int MIN_FRAME_INTERVAL_MS = 15;
 
 /// 目标帧率默认值（刷新率，单位 Hz）
-/// 推荐值：30 FPS（平衡 CPU 占用和渲染流畅度）
+/// 推荐值：60 FPS（平衡 CPU 占用和渲染流畅度）
 /// 对应 config.h AdvancedConfig::refreshRateHz 的默认值
-constexpr int DEFAULT_REFRESH_RATE_HZ = 30;
+constexpr int DEFAULT_REFRESH_RATE_HZ = 60;
 
 // ═══════════════════════════════════════
 // 歌词窗口尺寸（DPI 缩放前的基础值，96 DPI）

@@ -43,16 +43,9 @@ _deps
 *.log
 logs/
 
-# WebView2 / Edge runtime caches —— 开发者本地生成的用户数据目录，
-# 不应该进入 release / 版本控制；同时避免在包内泄露本地路径信息
-# （例如 leveldb LOG 中的 C:\Users\<username>\...）。
-MoeKoeTaskbarLyrics.exe.WebView2/
-*.WebView2/
-EBWebView/
 
 # Dev notes (推测/分析文档，不纳入版本控制)
-问题推测.md
-问题推测2.md
+审查和建议.md
 尝试替代webview2的方案.md
 ROADMAP.md
 

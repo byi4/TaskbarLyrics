@@ -10,6 +10,8 @@
 
 #include <string>
 
+#include "constants.h"
+
 namespace moekoe {
 
 struct AppearanceConfig {
@@ -50,7 +52,7 @@ struct AppearanceConfig {
 struct AdvancedConfig {
     int  websocketPort{6520};
     int  httpServerPort{6523};
-    int  refreshRateHz{60};
+    int  refreshRateHz{constants::DEFAULT_REFRESH_RATE_HZ};
     bool debugLog{false};
     bool enableFullscreenHide{true};  // 全屏时自动隐藏歌词
 };

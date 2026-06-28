@@ -17,18 +17,6 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install WebView2 SDK (NuGet)
-        shell: powershell
-        run: |
-          nuget install Microsoft.Web.WebView2 -Version 1.0.3856.49 -OutputDirectory "${{ github.workspace }}\packages"
-          # 列出完整的包目录结构，找到 .lib 和 .h 的实际位置
-          Write-Host "=== Full NuGet package tree ==="
-          Get-ChildItem -Recurse "${{ github.workspace }}\packages" | Select-Object FullName | Format-Table -AutoSize
-          Write-Host "=== Searching for .lib files ==="
-          Get-ChildItem -Recurse "${{ github.workspace }}\packages" -Filter "*.lib" | Select-Object FullName
-          Write-Host "=== Searching for WebView2.h ==="
-          Get-ChildItem -Recurse "${{ github.workspace }}\packages" -Filter "WebView2.h" | Select-Object FullName
-
       - name: Install dependencies (vcpkg)
         shell: powershell
         run: |
@@ -50,34 +38,8 @@ jobs:
       - name: Configure CMake
         shell: powershell
         run: |
-          # 动态查找 NuGet 包中的实际文件路径（限定 x64 架构）
-          $pkgDir = "${{ github.workspace }}\packages\Microsoft.Web.WebView2.1.0.3856.49"
-          
-          # 优先从 x64 子目录精确查找（避免 arm64 混入）
-          $x64LibPath = "$pkgDir\build\native\x64\WebView2Loader.dll.lib"
-          if (Test-Path $x64LibPath) {
-            $libFile = Get-Item $x64LibPath
-          } else {
-            # 回退：递归搜索整个包
-            Write-Host "WARNING: x64 lib not found at expected path, searching recursively..."
-            $libFile = Get-ChildItem -Recurse $pkgDir -Filter "WebView2Loader.dll.lib" | Where-Object { $_.FullName -notmatch "arm64" } | Select-Object -First 1
-          }
-          $incFile = (Get-ChildItem -Recurse $pkgDir -Filter "WebView2.h" | Select-Object -First 1)
-          
-          if ($libFile) {
-            Write-Host "Found lib: $($libFile.FullName)"
-            $libDir = Split-Path $libFile.FullName
-          } else { Write-Host "WARNING: WebView2Loader.lib not found in package"; $libDir = "" }
-          
-          if ($incFile) {
-            Write-Host "Found header: $($incFile.FullName)"
-            $incDir = Split-Path $incFile.FullName
-          } else { Write-Host "WARNING: WebView2.h not found in package"; $incDir = "" }
-          
           cmake -B build -S . `
             "-DVCPKG_INSTALLED_DIR=$env:VCPKG_INSTALLED_DIR" `
-            "-DWEBVIEW2_INCLUDE_DIR=$incDir" `
-            "-DWEBVIEW2_LOADER_DIR=$libDir" `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -89,7 +51,6 @@ jobs:
           name: MoeKoeTaskbarLyrics-x64
           path: |
             build/Release/MoeKoeTaskbarLyrics.exe
-            build/Release/WebView2Loader.dll
             build/Release/z.dll
             resources/settings.html
             resources/icon.ico
