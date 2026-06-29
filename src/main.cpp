@@ -154,8 +154,9 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         if (moekoe::ConfigDialog::Show(app.hInstance, app.hwnd, *app.config,
                                        /*boundMode*/ false,
                                        [&app]() {
+                                           // 同 ID_MENU_EXIT：ConfigDialog 的模态循环
+                                           // 嵌套在 TrackPopupMenuEx 内，WM_QUIT 会被吞掉
                                            app.running = false;
-                                           ::PostQuitMessage(0);
                                        })) {
             ApplyRendererSettings(app);
             if (app.taskbarWindow) {
@@ -172,8 +173,9 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
             L"确定要退出吗？",
             L"退出", MB_YESNO | MB_ICONQUESTION);
         if (ret == IDYES) {
+            // 同 ID_MENU_EXIT：当前仍在 TrackPopupMenuEx 模态循环内，
+            // PostQuitMessage 发出的 WM_QUIT 会被吞掉，仅设 running=false
             app.running = false;
-            ::PostQuitMessage(0);
         }
         break;
     }
@@ -214,8 +216,12 @@ void OnTrayCommand(AppContext& app, UINT menuId) {
         break;
     }
     case ID_MENU_EXIT: {
+        // 不能在此调用 PostQuitMessage(0)：当前处在 TrackPopupMenuEx 的
+        // 模态消息循环中，WM_QUIT 会被其内部 GetMessage 吞掉，导致回到
+        // 主消息循环后 GetMessage 永久阻塞，程序卡死。
+        // 仅设置 running=false，由主循环的 while 条件 (app.running && GetMessage)
+        // 短路跳出即可。
         app.running = false;
-        ::PostQuitMessage(0);
         break;
     }
     default:

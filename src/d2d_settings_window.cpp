@@ -77,6 +77,51 @@ D2D1_COLOR_F D2DSettingsWindow::Lerp(const D2D1_COLOR_F& a, const D2D1_COLOR_F& 
             a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t};
 }
 
+// HSL ↔ RGB 转换
+// ═══════════════════════════════
+
+D2D1_COLOR_F D2DSettingsWindow::HSLToRGB(float h, float s, float l) {
+    // h ∈ [0, 360), s ∈ [0, 1], l ∈ [0, 1]
+    float c = (1.0f - std::fabs(2.0f * l - 1.0f)) * s;
+    float hp = h / 60.0f;
+    float x = c * (1.0f - std::fabs(std::fmod(hp, 2.0f) - 1.0f));
+    float m = l - c / 2.0f;
+
+    float r1 = 0, g1 = 0, b1 = 0;
+    if (hp < 1)      { r1 = c; g1 = x; }
+    else if (hp < 2) { r1 = x; g1 = c; }
+    else if (hp < 3) { g1 = c; b1 = x; }
+    else if (hp < 4) { g1 = x; b1 = c; }
+    else if (hp < 5) { r1 = x; b1 = c; }
+    else             { r1 = c; b1 = x; }
+
+    return {r1 + m, g1 + m, b1 + m, 1.0f};
+}
+
+void D2DSettingsWindow::RGBToHSL(const D2D1_COLOR_F& rgb, float& h, float& s, float& l) {
+    float cmax = std::max({rgb.r, rgb.g, rgb.b});
+    float cmin = std::min({rgb.r, rgb.g, rgb.b});
+    float delta = cmax - cmin;
+
+    l = (cmax + cmin) / 2.0f;
+
+    if (delta < 0.0001f) {
+        h = 0; s = 0;
+        return;
+    }
+
+    s = delta / (1.0f - std::fabs(2.0f * l - 1.0f));
+
+    if (cmax == rgb.r)
+        h = 60.0f * std::fmod((rgb.g - rgb.b) / delta, 6.0f);
+    else if (cmax == rgb.g)
+        h = 60.0f * ((rgb.b - rgb.r) / delta + 2.0f);
+    else
+        h = 60.0f * ((rgb.r - rgb.g) / delta + 4.0f);
+
+    if (h < 0) h += 360.0f;
+}
+
 // ═══════════════════════════════
 // 暗色模式检测
 // ═══════════════════════════════
@@ -675,6 +720,11 @@ void D2DSettingsWindow::DrawAll() {
     // 绘制标题栏（在控件之上）
     DrawTitleBar(renderTarget_.Get());
 
+    // 绘制颜色选择器弹窗（在最上层）
+    if (colorPickerActive_) {
+        DrawColorPickerPopup(renderTarget_.Get());
+    }
+
     HRESULT hr = renderTarget_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
         renderTarget_.Reset();
@@ -785,8 +835,8 @@ void D2DSettingsWindow::DrawLabelRow(ID2D1RenderTarget* rt, const Control& c) {
                      caretBr.Get(), 1.f);
     }
 
-    // 字体选择按钮（仅 fontFamily 控件）
-    if (c.id == "fontFamily") {
+    // 字体选择按钮（fontFamily / cardFontFamily 控件）
+    if (c.id == "fontFamily" || c.id == "cardFontFamily") {
         float btnX = inputLeft - 50.f;
         float btnW = 42.f;
         float btnH = 26.f;
@@ -1135,10 +1185,265 @@ void D2DSettingsWindow::DrawTitleBar(ID2D1RenderTarget* rt) {
 }
 
 // ═══════════════════════════════
+// D2D 颜色选择器弹窗
+// ═══════════════════════════════
+
+void D2DSettingsWindow::ActivateColorPicker(const D2D1_COLOR_F& initialColor) {
+    // 从当前 RGB 颜色计算 HSL，确保弹窗初始状态与当前颜色一致
+    RGBToHSL(initialColor, pickerHue_, pickerSat_, pickerLum_);
+
+    // 计算弹窗位置（屏幕坐标）：在窗口右侧居中
+    RECT clientRc; GetClientRect(hwnd_, &clientRc);
+    const int popupW = 224;
+    const int popupH = 220;
+    int popupX = clientRc.right - popupW - 8;
+    int popupY = kTitleBarHeight + 16;
+
+    colorPickerRect_ = {popupX, popupY, popupX + popupW, popupY + popupH};
+
+    // 色板网格区域（左侧 180x180）
+    const int gridPad = 8;
+    colorGridRect_ = {popupX + gridPad, popupY + gridPad,
+                      popupX + gridPad + 180, popupY + gridPad + 180};
+
+    // 亮度条区域（色板右侧）
+    const int barW = 18;
+    const int barPadX = 4;
+    colorBarRect_ = {colorGridRect_.right + barPadX, colorGridRect_.top,
+                     colorGridRect_.right + barPadX + barW, colorGridRect_.bottom};
+
+    // 预览色块（色板下方）
+    colorPreviewRect_ = {colorGridRect_.left, colorGridRect_.bottom + 6,
+                         colorGridRect_.left + 40, colorGridRect_.bottom + 28};
+
+    colorPickerActive_ = true;
+    SetCapture(hwnd_);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void D2DSettingsWindow::DeactivateColorPicker() {
+    colorPickerActive_ = false;
+    activeColorCtrl_ = nullptr;
+    ReleaseCapture();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+bool D2DSettingsWindow::HitTestColorPicker(int x, int y, bool& inGrid, bool& inBar) {
+    inGrid = false;
+    inBar = false;
+    if (!colorPickerActive_) return false;
+
+    if (PtInRect(&colorPickerRect_, {x, y})) {
+        inGrid = PtInRect(&colorGridRect_, {x, y});
+        inBar = PtInRect(&colorBarRect_, {x, y});
+        return true;
+    }
+    return false;
+}
+
+void D2DSettingsWindow::DrawColorPickerPopup(ID2D1RenderTarget* rt) {
+    if (!colorPickerActive_) return;
+
+    // 弹窗背景 + 阴影
+    ComPtr<ID2D1SolidColorBrush> popupBg, popupBorder;
+    D2D1_COLOR_F bgc = isDarkMode_ ? D2D1::ColorF(0.18f, 0.18f, 0.22f, 0.98f)
+                                   : D2D1::ColorF(0.97f, 0.97f, 0.99f, 0.98f);
+    rt->CreateSolidColorBrush(bgc, &popupBg);
+    FillRoundedRect(rt, popupBg.Get(),
+                    static_cast<float>(colorPickerRect_.left),
+                    static_cast<float>(colorPickerRect_.top),
+                    static_cast<float>(colorPickerRect_.right - colorPickerRect_.left),
+                    static_cast<float>(colorPickerRect_.bottom - colorPickerRect_.top), 8.f);
+
+    rt->CreateSolidColorBrush(theme_.border, &popupBorder);
+    DrawRoundedRect(rt, popupBorder.Get(), 1.5f,
+                    static_cast<float>(colorPickerRect_.left),
+                    static_cast<float>(colorPickerRect_.top),
+                    static_cast<float>(colorPickerRect_.right - colorPickerRect_.left),
+                    static_cast<float>(colorPickerRect_.bottom - colorPickerRect_.top), 8.f);
+
+    // ── 绘制色板（Hue × Saturation 网格） ──
+    // 使用逐像素方法：水平 = Hue(0→360)，垂直 = Sat(1→0，即顶部饱和、底部灰)
+    const int gw = colorGridRect_.right - colorGridRect_.left;
+    const int gh = colorGridRect_.bottom - colorGridRect_.top;
+
+    // 创建 bitmap 逐像素填充
+    ComPtr<ID2D1Bitmap> gridBitmap;
+    D2D1_SIZE_U bmpSizeU = D2D1::SizeU(static_cast<UINT>(gw), static_cast<UINT>(gh));
+    D2D1_BITMAP_PROPERTIES bmpProps = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    HRESULT hr = rt->CreateBitmap(bmpSizeU, bmpProps, &gridBitmap);
+    if (SUCCEEDED(hr)) {
+        std::vector<uint32_t> pixels(gw * gh);
+        for (int py = 0; py < gh; ++py) {
+            float sat = 1.0f - static_cast<float>(py) / static_cast<float>(gh - 1);
+            for (int px = 0; px < gw; ++px) {
+                float hue = 360.0f * static_cast<float>(px) / static_cast<float>(gw - 1);
+                D2D1_COLOR_F c = HSLToRGB(hue, sat, pickerLum_);
+                uint8_t r = static_cast<uint8_t>(std::clamp(c.r * 255.0f, 0.0f, 255.0f));
+                uint8_t g = static_cast<uint8_t>(std::clamp(c.g * 255.0f, 0.0f, 255.0f));
+                uint8_t b = static_cast<uint8_t>(std::clamp(c.b * 255.0f, 0.0f, 255.0f));
+                pixels[py * gw + px] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        gridBitmap->CopyFromMemory(nullptr, pixels.data(), gw * 4);
+        rt->DrawBitmap(gridBitmap.Get(),
+                       D2D1::RectF(static_cast<float>(colorGridRect_.left),
+                                   static_cast<float>(colorGridRect_.top),
+                                   static_cast<float>(colorGridRect_.right),
+                                   static_cast<float>(colorGridRect_.bottom)),
+                       1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    }
+
+    // 色板光标十字
+    int cx = static_cast<int>(pickerHue_ / 360.0f * (gw - 1)) + colorGridRect_.left;
+    int cy = static_cast<int>((1.0f - pickerSat_) * (gh - 1)) + colorGridRect_.top;
+
+    ComPtr<ID2D1SolidColorBrush> cursorBr;
+    D2D1_COLOR_F cursorClr = pickerLum_ > 0.5f ? D2D1::ColorF(0, 0, 0, 0.9f)
+                                                : D2D1::ColorF(1, 1, 1, 0.9f);
+    rt->CreateSolidColorBrush(cursorClr, &cursorBr);
+    float cx_f = static_cast<float>(cx);
+    float cy_f = static_cast<float>(cy);
+    rt->DrawLine(D2D1::Point2F(cx_f - 6, cy_f), D2D1::Point2F(cx_f + 6, cy_f), cursorBr.Get(), 1.5f);
+    rt->DrawLine(D2D1::Point2F(cx_f, cy_f - 6), D2D1::Point2F(cx_f, cy_f + 6), cursorBr.Get(), 1.5f);
+    rt->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx_f, cy_f), 4.5f, 4.5f), cursorBr.Get(), 1.5f);
+
+    // ── 绘制亮度条 ──
+    const int bw = colorBarRect_.right - colorBarRect_.left;
+    const int bh = colorBarRect_.bottom - colorBarRect_.top;
+    ComPtr<ID2D1Bitmap> barBitmap;
+    D2D1_SIZE_U barSizeU = D2D1::SizeU(static_cast<UINT>(bw), static_cast<UINT>(bh));
+    HRESULT barHr = rt->CreateBitmap(barSizeU, bmpProps, &barBitmap);
+    if (SUCCEEDED(barHr)) {
+        std::vector<uint32_t> barPixels(bw * bh);
+        for (int py = 0; py < bh; ++py) {
+            float lum = 1.0f - static_cast<float>(py) / static_cast<float>(bh - 1);
+            D2D1_COLOR_F c = HSLToRGB(pickerHue_, pickerSat_, lum);
+            uint8_t r = static_cast<uint8_t>(std::clamp(c.r * 255.0f, 0.0f, 255.0f));
+            uint8_t g = static_cast<uint8_t>(std::clamp(c.g * 255.0f, 0.0f, 255.0f));
+            uint8_t b = static_cast<uint8_t>(std::clamp(c.b * 255.0f, 0.0f, 255.0f));
+            for (int px = 0; px < bw; ++px) {
+                barPixels[py * bw + px] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        barBitmap->CopyFromMemory(nullptr, barPixels.data(), bw * 4);
+        rt->DrawBitmap(barBitmap.Get(),
+                       D2D1::RectF(static_cast<float>(colorBarRect_.left),
+                                   static_cast<float>(colorBarRect_.top),
+                                   static_cast<float>(colorBarRect_.right),
+                                   static_cast<float>(colorBarRect_.bottom)),
+                       1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    }
+
+    // 亮度条边框 + 滑块指示
+    DrawRoundedRect(rt, popupBorder.Get(), 1.0f,
+                    static_cast<float>(colorBarRect_.left),
+                    static_cast<float>(colorBarRect_.top),
+                    static_cast<float>(bw), static_cast<float>(bh), 4.f);
+
+    int barCy = static_cast<int>((1.0f - pickerLum_) * (bh - 1)) + colorBarRect_.top;
+    float barCx = static_cast<float>(colorBarRect_.left + bw / 2);
+    float barCy_f = static_cast<float>(barCy);
+    // 箭头指示
+    rt->DrawLine(D2D1::Point2F(static_cast<float>(colorBarRect_.right + 2), barCy_f),
+                 D2D1::Point2F(static_cast<float>(colorBarRect_.right + 2) + 6, barCy_f - 4),
+                 cursorBr.Get(), 1.5f);
+    rt->DrawLine(D2D1::Point2F(static_cast<float>(colorBarRect_.right + 2), barCy_f),
+                 D2D1::Point2F(static_cast<float>(colorBarRect_.right + 2) + 6, barCy_f + 4),
+                 cursorBr.Get(), 1.5f);
+
+    // ── 预览色块 ──
+    D2D1_COLOR_F previewColor = HSLToRGB(pickerHue_, pickerSat_, pickerLum_);
+    ComPtr<ID2D1SolidColorBrush> prevBr, prevBorderBr;
+    rt->CreateSolidColorBrush(previewColor, &prevBr);
+    FillRoundedRect(rt, prevBr.Get(),
+                    static_cast<float>(colorPreviewRect_.left),
+                    static_cast<float>(colorPreviewRect_.top),
+                    static_cast<float>(colorPreviewRect_.right - colorPreviewRect_.left),
+                    static_cast<float>(colorPreviewRect_.bottom - colorPreviewRect_.top), 4.f);
+    rt->CreateSolidColorBrush(theme_.border, &prevBorderBr);
+    DrawRoundedRect(rt, prevBorderBr.Get(), 1.0f,
+                    static_cast<float>(colorPreviewRect_.left),
+                    static_cast<float>(colorPreviewRect_.top),
+                    static_cast<float>(colorPreviewRect_.right - colorPreviewRect_.left),
+                    static_cast<float>(colorPreviewRect_.bottom - colorPreviewRect_.top), 4.f);
+
+    // ── Hex 文本 ──
+    std::string hexStr = ColorFToHex(previewColor);
+    std::wstring wHex = Utf8ToWide(hexStr);
+    DrawTextLine(rt, valueFmt_.Get(), textSecondaryBrush_.Get(),
+                 wHex.c_str(),
+                 static_cast<float>(colorPreviewRect_.right + 8),
+                 static_cast<float>(colorPreviewRect_.top + 4),
+                 80.f);
+
+    // ── "确认"按钮 ──
+    const float btnW = 56.f, btnH = 24.f;
+    const float btnX = static_cast<float>(colorPreviewRect_.right + 8);
+    const float btnY = static_cast<float>(colorPreviewRect_.bottom + 6);
+    RECT confirmBtnRect = {static_cast<int>(btnX), static_cast<int>(btnY),
+                           static_cast<int>(btnX + btnW), static_cast<int>(btnY + btnH)};
+    ComPtr<ID2D1SolidColorBrush> confirmBg, confirmTxt;
+    rt->CreateSolidColorBrush(theme_.accent, &confirmBg);
+    FillRoundedRect(rt, confirmBg.Get(), btnX, btnY, btnW, btnH, 4.f);
+    rt->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &confirmTxt);
+    const wchar_t* okText = L"确定";
+    DrawTextLine(rt, hintFmt_.Get(), confirmTxt.Get(), okText, btnX + 12.f, btnY + 3.f, 36.f);
+
+    // 存储确认按钮区域（供 HitTest 使用）
+    colorConfirmRect_ = {static_cast<int>(btnX), static_cast<int>(btnY),
+                         static_cast<int>(btnX + btnW), static_cast<int>(btnY + btnH)};
+}
+
+// ═══════════════════════════════
 // 事件处理
 // ═══════════════════════════════
 
 void D2DSettingsWindow::OnMouseDown(int x, int y) {
+    // 颜色选择器弹窗优先处理
+    if (colorPickerActive_) {
+        bool inGrid = false, inBar = false;
+        bool inPopup = HitTestColorPicker(x, y, inGrid, inBar);
+
+        if (PtInRect(&colorConfirmRect_, {x, y})) {
+            // 点击确认按钮：应用颜色
+            if (activeColorCtrl_) {
+                activeColorCtrl_->colorValue = HSLToRGB(pickerHue_, pickerSat_, pickerLum_);
+                activeColorCtrl_->textValue = ColorFToHex(activeColorCtrl_->colorValue);
+            }
+            DeactivateColorPicker();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+
+        if (inGrid) {
+            const int gw = colorGridRect_.right - colorGridRect_.left;
+            const int gh = colorGridRect_.bottom - colorGridRect_.top;
+            float nx = std::clamp(static_cast<float>(x - colorGridRect_.left) / gw, 0.0f, 1.0f);
+            float ny = std::clamp(static_cast<float>(y - colorGridRect_.top) / gh, 0.0f, 1.0f);
+            pickerHue_ = nx * 360.0f;
+            pickerSat_ = 1.0f - ny;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+
+        if (inBar) {
+            const int bh = colorBarRect_.bottom - colorBarRect_.top;
+            float ny = std::clamp(static_cast<float>(y - colorBarRect_.top) / bh, 0.0f, 1.0f);
+            pickerLum_ = 1.0f - ny;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+
+        if (!inPopup) {
+            // 点击弹窗外 → 取消
+            DeactivateColorPicker();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
     Control* hit = HitTest(x, y);
     if (!hit) return;
 
@@ -1152,7 +1457,7 @@ void D2DSettingsWindow::OnMouseDown(int x, int y) {
         break;
 
     case CtrlType::LabelRow:
-        if (hit->id == "fontFamily") {
+        if (hit->id == "fontFamily" || hit->id == "cardFontFamily") {
             // 点击了"选择"按钮区域
             LOGFONT lf{};
             lf.lfCharSet = DEFAULT_CHARSET;
@@ -1166,7 +1471,10 @@ void D2DSettingsWindow::OnMouseDown(int x, int y) {
             cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT;
             if (::ChooseFontW(&cf)) {
                 hit->textValue = WideToLocalUtf8(std::wstring(lf.lfFaceName));
-                editedConfig_.MutableAppearance().fontFamily = hit->textValue;
+                if (hit->id == "fontFamily")
+                    editedConfig_.MutableAppearance().fontFamily = hit->textValue;
+                else
+                    editedConfig_.MutableAppearance().cardFontFamily = hit->textValue;
             }
         } else if (!hit->readOnly) {
             // 开始编辑文本
@@ -1180,23 +1488,9 @@ void D2DSettingsWindow::OnMouseDown(int x, int y) {
         break;
 
     case CtrlType::ColorRow: {
-        // 打开系统颜色选择器
-        COLORREF customColors[16]{};
-        CHOOSECOLORW cc{};
-        cc.lStructSize = sizeof(cc);
-        cc.hwndOwner = hwnd_;
-        cc.rgbResult = RGB(
-            static_cast<int>(hit->colorValue.r * 255),
-            static_cast<int>(hit->colorValue.g * 255),
-            static_cast<int>(hit->colorValue.b * 255));
-        cc.lpCustColors = customColors;
-        cc.Flags = CC_RGBINIT | CC_FULLOPEN;
-        if (::ChooseColorW(&cc)) {
-            hit->colorValue.r = GetRValue(cc.rgbResult) / 255.f;
-            hit->colorValue.g = GetGValue(cc.rgbResult) / 255.f;
-            hit->colorValue.b = GetBValue(cc.rgbResult) / 255.f;
-            hit->textValue = ColorFToHex(hit->colorValue);
-        }
+        // 激活 D2D 自定义颜色选择器弹窗
+        activeColorCtrl_ = hit;
+        ActivateColorPicker(hit->colorValue);
         break;
     }
 
@@ -1262,6 +1556,31 @@ void D2DSettingsWindow::OnMouseUp(int x, int y) {
 }
 
 void D2DSettingsWindow::OnMouseMove(int x, int y) {
+    // 颜色选择器弹窗内拖动
+    if (colorPickerActive_ && (GetKeyState(VK_LBUTTON) & 0x8000)) {
+        bool inGrid = false, inBar = false;
+        HitTestColorPicker(x, y, inGrid, inBar);
+
+        if (inGrid) {
+            const int gw = colorGridRect_.right - colorGridRect_.left;
+            const int gh = colorGridRect_.bottom - colorGridRect_.top;
+            float nx = std::clamp(static_cast<float>(x - colorGridRect_.left) / gw, 0.0f, 1.0f);
+            float ny = std::clamp(static_cast<float>(y - colorGridRect_.top) / gh, 0.0f, 1.0f);
+            pickerHue_ = nx * 360.0f;
+            pickerSat_ = 1.0f - ny;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+
+        if (inBar) {
+            const int bh = colorBarRect_.bottom - colorBarRect_.top;
+            float ny = std::clamp(static_cast<float>(y - colorBarRect_.top) / bh, 0.0f, 1.0f);
+            pickerLum_ = 1.0f - ny;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+    }
+
     // 标题栏按钮悬停检测
     bool newHoverClose = PtInRect(&closeBtnRect_, {x, y});
     bool newHoverMin   = PtInRect(&minBtnRect_, {x, y});
@@ -1404,6 +1723,8 @@ void D2DSettingsWindow::ApplyAndSave() {
             ap.cardFontSizeCurrent = static_cast<int>(c.sliderValue);
         } else if (c.id == "cardFontSizeNext") {
             ap.cardFontSizeNext = static_cast<int>(c.sliderValue);
+        } else if (c.id == "cardFontFamily") {
+            ap.cardFontFamily = c.textValue;
         } else if (c.id == "cardCurrentColor") {
             ap.cardCurrentColor = ColorFToHex(c.colorValue);
         } else if (c.id == "cardNextColor") {
@@ -1481,8 +1802,8 @@ LRESULT CALLBACK D2DSettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, 
             }
 
             Control* hit = self->HitTest(x, y);
-            if (hit) {
-                self->OnMouseDown(x, y); // 点击了控件，正常处理
+            if (hit || self->colorPickerActive_) {
+                self->OnMouseDown(x, y); // 点击了控件或颜色选择器弹窗激活时，正常处理
             } else {
                 // 点击空白区域，启动系统拖动
                 ::SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
