@@ -46,6 +46,11 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -- /v:minimal
 
+      - name: Package
+        shell: powershell
+        run: |
+          python scripts/pack_zip.py moeKoe-taskbar-lyrics moeKoe-taskbar-lyrics.zip
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
