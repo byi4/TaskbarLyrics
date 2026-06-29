@@ -28,7 +28,7 @@ jobs:
             & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
           }
 
-          & "$vcpkgRoot\vcpkg.exe" install ixwebsocket nlohmann-json zlib mbedtls --triplet x64-windows --classic
+          & "$vcpkgRoot\vcpkg.exe" install ixwebsocket nlohmann-json zlib mbedtls kissfft --triplet x64-windows --classic
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
           $installDir = "$vcpkgRoot\installed\x64-windows"
@@ -50,7 +50,8 @@ jobs:
         with:
           name: MoeKoeTaskbarLyrics-x64
           path: |
-            build/Release/MoeKoeTaskbarLyrics.exe
-            build/Release/z.dll
-            resources/settings.html
-            resources/icon.ico
+            moeKoe-taskbar-lyrics/MoeKoeTaskbarLyrics.exe
+            moeKoe-taskbar-lyrics/z.dll
+            moeKoe-taskbar-lyrics/kissfft-float.dll
+            moeKoe-taskbar-lyrics/resources/
+            moeKoe-taskbar-lyrics.zip
