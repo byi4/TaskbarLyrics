@@ -16,7 +16,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 启用 Windows 10/11 SDK
 if(MSVC)
     add_compile_options(/W4 /permissive- /utf-8 /EHsc)
-    add_compile_options(/await /winrt)  # C++/WinRT 支持 (SMTC API 需要)
+    # /await /winrt 已移至主目标 target_compile_options，避免 FetchContent 引入的
+    # Catch2 等子项目继承已废弃的 /await 标志（MSVC 14.51+ 会报 C2338 static_assert）
     add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX UNICODE _UNICODE)
     set(CMAKE_WIN32_EXECUTABLE ON)
 endif()
@@ -280,6 +281,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${HTTPLIB_INCLUDE_DIR}
 )
 
+target_compile_options(${PROJECT_NAME} PRIVATE /await /winrt)  # C++/WinRT 支持 (SMTC API)，仅主项目生效
 target_compile_definitions(${PROJECT_NAME} PRIVATE KISSFFT_STATIC)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
