@@ -246,6 +246,7 @@ set(SOURCES
     src/config_dialog.cpp
     src/native_messaging.cpp
     src/api_enabler.cpp
+    src/color_picker.cpp
     src/app_icon.rc
 )
 
@@ -256,6 +257,9 @@ set(HEADERS
     src/websocket_client.h
     src/http_server.h
     src/d2d_settings_window.h
+    src/color_picker.h
+    src/color_utils.h
+    src/settings_draw_utils.h
     src/lyrics_parser.h
     src/shell_companion.h
     src/taskbar_window.h

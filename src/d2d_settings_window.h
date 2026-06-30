@@ -5,9 +5,11 @@
 //   - 使用 Direct2D + DirectWrite 绘制现代化设置界面（圆角、阴影、毛玻璃背景）
 //   - 提供与 settings.html 功能完全一致的设置项
 //   - 仅保留原生 Direct2D 设置界面
+//   - 颜色选择器弹窗已拆分至 color_picker.h/.cpp
 //
 #pragma once
 
+#include "color_picker.h"
 #include "config.h"
 
 #include <d2d1.h>
@@ -20,6 +22,9 @@
 #include <windows.h>
 
 namespace moekoe {
+
+// ThemeColors 别名：与 color_picker.h 中的 D2DThemeColors 类型保持一致
+using ThemeColors = D2DThemeColors;
 
 class D2DSettingsWindow {
 public:
@@ -150,18 +155,7 @@ private:
     // 取消（关闭窗口）
     void Cancel();
 
-    // 颜色工具
-    static D2D1_COLOR_F HexToColorF(const std::string& hex, float alpha = 1.0f);
-    static std::string ColorFToHex(const D2D1_COLOR_F& c);
-    static D2D1_COLOR_F Lerp(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t);
-    static D2D1_COLOR_F HSLToRGB(float h, float s, float l);
-    static void RGBToHSL(const D2D1_COLOR_F& rgb, float& h, float& s, float& l);
-
-    // D2D 颜色选择器弹窗
-    void DrawColorPickerPopup(ID2D1RenderTarget* rt);
-    void ActivateColorPicker(const D2D1_COLOR_F& initialColor);
-    void DeactivateColorPicker();
-    bool HitTestColorPicker(int x, int y, bool& inGrid, bool& inBar);
+    // 颜色工具（已移至 color_utils.h，此处保留引用以兼容旧调用）
 
     HWND hwnd_{nullptr};
     HINSTANCE hInstance_{nullptr};
@@ -215,31 +209,15 @@ private:
     static constexpr int kWinHeight = 580;
     static constexpr int kTitleBarHeight = 36;  // 自绘标题栏高度
 
-    // D2D 颜色选择器弹窗状态
-    bool colorPickerActive_{false};
-    Control* activeColorCtrl_{nullptr};
-    float pickerHue_{0.0f};       // 色相 0-360
-    float pickerSat_{0.0f};       // 饱和度 0-1
-    float pickerLum_{0.5f};       // 亮度 0-1（默认 0.5，解决色板点击亮度为 0 导致的 bug）
-    RECT colorPickerRect_{};      // 弹窗区域（屏幕坐标）
-    RECT colorGridRect_{};        // 色板网格区域
-    RECT colorBarRect_{};         // 亮度条区域
-    RECT colorPreviewRect_{};     // 预览色块区域
-    RECT colorConfirmRect_{};     // 确定按钮区域
+    // 颜色选择器弹窗（已拆分至 color_picker.h/.cpp）
+    ColorPickerPopup colorPicker_;
+    Control* activeColorCtrl_{nullptr};  // 当前正在编辑颜色的控件
 
     // 暗色模式检测
     bool isDarkMode_{false};
 
     // 颜色主题（根据暗/亮模式切换）
-    struct ThemeColors {
-        D2D1_COLOR_F bg;
-        D2D1_COLOR_F surface;
-        D2D1_COLOR_F border;
-        D2D1_COLOR_F text;
-        D2D1_COLOR_F textSecondary;
-        D2D1_COLOR_F accent;
-        D2D1_COLOR_F accentHover;
-    } theme_;
+    ThemeColors theme_;
 
     void DetectDarkMode();
     void UpdateThemeColors();
